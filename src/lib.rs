@@ -1,11 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
-use colored::*;
 use std::io::{self, Write};
 
 mod cli;
 pub mod commands;
-mod git;
+pub mod git;
 
 use cli::{Cli, Commands};
 use commands::*;

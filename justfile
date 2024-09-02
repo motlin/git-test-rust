@@ -1,5 +1,6 @@
 default:
     cargo fmt
-    # cargo build --release
+    cargo test
     cargo build
-    cp ./target/debug/git-test ~/bin
+    # cargo build --release
+    # cp ./target/debug/git-test ~/bin

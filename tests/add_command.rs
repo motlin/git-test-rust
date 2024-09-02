@@ -1,10 +1,11 @@
-use std::fs;
+use anyhow::Result;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
 use git_test::commands::add::cmd_add;
+use git_test::git;
 
 struct TestWriter {
     buffer: Vec<u8>,
@@ -31,7 +32,7 @@ impl Write for TestWriter {
     }
 }
 
-fn init_git_repo(temp_dir: &Path) {
+fn init_git_repo(temp_dir: &PathBuf) {
     Command::new("git")
         .args(&["init"])
         .current_dir(temp_dir)
@@ -39,8 +40,8 @@ fn init_git_repo(temp_dir: &Path) {
         .unwrap();
 }
 
-fn get_git_config(repo_path: &Path) -> String {
-    fs::read_to_string(repo_path.join(".git/config")).unwrap()
+fn get_test_command(repo_path: &PathBuf, test_name: &str) -> Result<String> {
+    git::get_test_command(repo_path, test_name)
 }
 
 fn setup_test() -> (TempDir, PathBuf) {
@@ -51,7 +52,7 @@ fn setup_test() -> (TempDir, PathBuf) {
 }
 
 #[test]
-fn test_add_new_test() {
+fn test_add_new_test() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
@@ -63,16 +64,15 @@ fn test_add_new_test() {
         "just default",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
 
-    let config = get_git_config(&repo_path);
-    assert!(config.contains("[test \"default\"]"));
-    assert!(config.contains("command = just default"));
+    let command = get_test_command(&repo_path, "default")?;
+    assert_eq!(command, "just default");
+    Ok(())
 }
 
 #[test]
-fn test_add_multiple_tests() {
+fn test_add_multiple_tests() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
@@ -84,8 +84,7 @@ fn test_add_multiple_tests() {
         "just default",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
     cmd_add(
         &repo_path,
         "spotless-formats",
@@ -94,8 +93,7 @@ fn test_add_multiple_tests() {
         "just spotless formats",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
     cmd_add(
         &repo_path,
         "spotless-java-sort-imports",
@@ -104,20 +102,22 @@ fn test_add_multiple_tests() {
         "just spotless java-sort-imports",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
 
-    let config = get_git_config(&repo_path);
-    assert!(config.contains("[test \"default\"]"));
-    assert!(config.contains("command = just default"));
-    assert!(config.contains("[test \"spotless-formats\"]"));
-    assert!(config.contains("command = just spotless formats"));
-    assert!(config.contains("[test \"spotless-java-sort-imports\"]"));
-    assert!(config.contains("command = just spotless java-sort-imports"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "just default");
+    assert_eq!(
+        get_test_command(&repo_path, "spotless-formats")?,
+        "just spotless formats"
+    );
+    assert_eq!(
+        get_test_command(&repo_path, "spotless-java-sort-imports")?,
+        "just spotless java-sort-imports"
+    );
+    Ok(())
 }
 
 #[test]
-fn test_add_existing_test() {
+fn test_add_existing_test() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
@@ -129,8 +129,7 @@ fn test_add_existing_test() {
         "just default",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
     cmd_add(
         &repo_path,
         "default",
@@ -139,22 +138,19 @@ fn test_add_existing_test() {
         "new command",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
 
     let output = writer.contents();
     assert!(
         output.contains("WARNING: there are already results stored for the test named 'default'")
     );
 
-    let config = get_git_config(&repo_path);
-    assert!(config.contains("[test \"default\"]"));
-    assert!(config.contains("command = new command"));
-    assert!(!config.contains("command = just default"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "new command");
+    Ok(())
 }
 
 #[test]
-fn test_add_existing_test_with_forget() {
+fn test_add_existing_test_with_forget() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
@@ -166,8 +162,7 @@ fn test_add_existing_test_with_forget() {
         "just default",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
     cmd_add(
         &repo_path,
         "default",
@@ -176,16 +171,13 @@ fn test_add_existing_test_with_forget() {
         "new command",
         0,
         &mut writer,
-    )
-    .unwrap();
+    )?;
 
-    let config = get_git_config(&repo_path);
-    assert!(config.contains("[test \"default\"]"));
-    assert!(config.contains("command = new command"));
-    assert!(!config.contains("command = just default"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "new command");
+    Ok(())
 }
 #[test]
-fn test_add_existing_test_with_same_command() {
+fn test_add_existing_test_with_same_command() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
@@ -197,8 +189,7 @@ fn test_add_existing_test_with_same_command() {
         "just default",
         1,
         &mut writer,
-    )
-    .unwrap();
+    )?;
     cmd_add(
         &repo_path,
         "default",
@@ -207,15 +198,21 @@ fn test_add_existing_test_with_same_command() {
         "just default",
         1,
         &mut writer,
-    )
-    .unwrap();
+    )?;
 
     let output = writer.contents();
     assert!(
         output.contains("Test 'default' already exists with the same command. No changes made.")
     );
 
-    let config = get_git_config(&repo_path);
-    assert!(config.contains("[test \"default\"]"));
-    assert!(config.contains("command = just default"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "just default");
+    Ok(())
+}
+
+#[test]
+fn test_add_nonexistent_test() {
+    let (_temp_dir, repo_path) = setup_test();
+
+    let result = get_test_command(&repo_path, "nonexistent");
+    assert!(result.is_err());
 }
