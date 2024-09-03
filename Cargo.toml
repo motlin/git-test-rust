@@ -9,6 +9,7 @@ clap = { version = "4.5.16", features = ["derive"] }
 colored = "2.0"
 log = "0.4.22"
 simple_logger = "5.0.0"
+regex = "1.10.6"
 
 [dev-dependencies]
 tempfile = "3.12.0"

@@ -12,6 +12,7 @@ fn log_and_run_command(command: &mut Command) -> Result<Output> {
 pub mod git {
     use crate::log_and_run_command;
     use anyhow::{Context, Result};
+    use regex::Regex;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -56,15 +57,54 @@ pub mod git {
             }
         }
 
-        pub fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
-            log_and_run_command(Command::new("git").arg("-C").arg(&self.root).args(&[
-                "config",
-                &format!("test.{}.command", test),
-                command,
-            ]))
-            .context("Failed to execute git config")?;
-
+        pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
+            log_and_run_command(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(&self.root)
+                    .args(&["config", key, value]),
+            )
+            .with_context(|| format!("Failed to set git config value for key '{}'", key))?;
             Ok(())
+        }
+
+        pub fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
+            self.set_config_value(&format!("test.{}.command", test), command)
+        }
+
+        pub fn list_tests(&self) -> Result<Vec<(String, String)>> {
+            let output =
+                log_and_run_command(Command::new("git").arg("-C").arg(&self.root).args(&[
+                    "config",
+                    "--get-regexp",
+                    "--null",
+                    r"^test\..*\.command$",
+                ]))
+                .context("Failed to execute git config --get-regexp")?;
+
+            if output.status.success() {
+                let config_output = String::from_utf8(output.stdout)?;
+                let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$").unwrap();
+
+                let vec = config_output
+                    .split('\0')
+                    .filter_map(|entry| {
+                        let mut parts = entry.splitn(2, '\n');
+                        match (parts.next(), parts.next()) {
+                            (Some(key), Some(value)) => {
+                                test_config_re.captures(key).map(|captures| {
+                                    let name = captures.name("name").unwrap().as_str().to_string();
+                                    (name, value.to_string())
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                Ok(vec)
+            } else {
+                Ok(Vec::new()) // Return an empty vector if no tests are found
+            }
         }
     }
 
@@ -364,10 +404,21 @@ pub mod commands {
 
     pub mod list {
         use super::*;
+        use colored::*;
+        use std::collections::HashMap;
 
         pub fn cmd_list(repo: &GitRepository) -> Result<()> {
-            // Implement list command
-            println!("Listing defined tests");
+            let tests = repo.list_tests()?;
+
+            if tests.is_empty() {
+                warn!("No tests defined.");
+            } else {
+                for (test_name, command) in tests {
+                    info!("{}:", test_name.bold());
+                    info!("    command = {}", command.green());
+                }
+            }
+
             Ok(())
         }
     }
@@ -428,7 +479,6 @@ pub mod commands {
     pub use run::cmd_run;
 }
 
-use crate::commands::cmd_add;
 use crate::git::get_repo_root;
 use cli::{Cli, Commands};
 
@@ -454,7 +504,10 @@ pub fn main() -> Result<()> {
     let repo = get_repo_root(&current_dir)?;
 
     match &cli.command {
-        Commands::Add(args) => cmd_add(&repo, &args.test, args.forget, args.keep, &args.command),
+        Commands::Add(args) => {
+            commands::cmd_add(&repo, &args.test, args.forget, args.keep, &args.command)
+        }
+        Commands::List => commands::cmd_list(&repo),
         _ => unimplemented!("Other commands need to be updated"),
     }
 }

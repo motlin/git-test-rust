@@ -242,3 +242,44 @@ mod test_command_add {
         assert_eq!(get_log_contents(), Vec::<String>::new());
     }
 }
+
+mod test_command_list {
+    use crate::test_git::setup_test;
+    use crate::test_logging::{clear_log_contents, get_log_contents, setup_logger};
+    use anyhow::Result;
+    use git_test::commands::cmd_list;
+
+    #[test]
+    fn test_list_tests() -> Result<()> {
+        setup_logger();
+        clear_log_contents();
+        let (_temp_dir, repo) = setup_test();
+
+        repo.set_test_command("default", "just default")?;
+        repo.set_config_value("test.default.description", "Default test")?;
+        repo.set_test_command("spotless-formats", "just spotless formats")?;
+        repo.set_config_value("test.spotless-formats.description", "Spotless formats test")?;
+        repo.set_test_command(
+            "spotless-java-sort-imports",
+            "just spotless java-sort-imports",
+        )?;
+        repo.set_test_command("empty-command", "")?;
+
+        cmd_list(&repo)?;
+
+        let log_contents = get_log_contents();
+        let expected_logs = vec![
+            "INFO - default:",
+            "INFO -     command = just default",
+            "INFO - spotless-formats:",
+            "INFO -     command = just spotless formats",
+            "INFO - spotless-java-sort-imports:",
+            "INFO -     command = just spotless java-sort-imports",
+            "INFO - empty-command:",
+            "INFO -     command = ",
+        ];
+
+        assert_eq!(log_contents, expected_logs);
+        Ok(())
+    }
+}
