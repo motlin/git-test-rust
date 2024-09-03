@@ -18,7 +18,7 @@ pub mod test_logging {
 
         fn log(&self, record: &Record) {
             if self.enabled(record.metadata()) {
-                let log_entry = format!("{} - {}", record.level(), record.args());
+                let log_entry = format!("{}", record.args());
                 LOG_CONTENTS.with(|contents| {
                     contents.borrow_mut().push(log_entry);
                 });
@@ -44,6 +44,10 @@ pub mod test_logging {
 
     pub fn get_log_contents() -> Vec<String> {
         LOG_CONTENTS.with(|contents| contents.borrow().clone())
+    }
+
+    pub fn set_color_enabled(enabled: bool) {
+        colored::control::set_override(enabled);
     }
 }
 
@@ -73,7 +77,9 @@ mod test_command_add {
     use anyhow::Result;
 
     use crate::test_git::setup_test;
-    use crate::test_logging::{clear_log_contents, get_log_contents, setup_logger};
+    use crate::test_logging::{
+        clear_log_contents, get_log_contents, set_color_enabled, setup_logger,
+    };
     use git_test::commands::add::cmd_add;
 
     #[test]
@@ -89,7 +95,7 @@ mod test_command_add {
 
         assert_eq!(
             get_log_contents(),
-            vec!["INFO - Changing test 'default' from '<empty>' to 'just default'",]
+            vec!["Changing test 'default' from '<empty>' to 'just default'",]
         );
         Ok(())
     }
@@ -127,9 +133,9 @@ mod test_command_add {
         );
 
         assert_eq!(get_log_contents(), vec![
-            "INFO - Changing test 'default' from '<empty>' to 'just default'",
-            "INFO - Changing test 'spotless-formats' from '<empty>' to 'just spotless formats'",
-            "INFO - Changing test 'spotless-java-sort-imports' from '<empty>' to 'just spotless java-sort-imports'",
+            "Changing test 'default' from '<empty>' to 'just default'",
+            "Changing test 'spotless-formats' from '<empty>' to 'just spotless formats'",
+            "Changing test 'spotless-java-sort-imports' from '<empty>' to 'just spotless java-sort-imports'",
         ]);
         Ok(())
     }
@@ -144,9 +150,9 @@ mod test_command_add {
         cmd_add(&repo, "default", false, false, "new command")?;
 
         assert_eq!(get_log_contents(), vec![
-            "INFO - Changing test 'default' from '<empty>' to 'old command'",
-            "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
-            "INFO - Changing test 'default' from 'old command' to 'new command'",
+            "Changing test 'default' from '<empty>' to 'old command'",
+            "Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
+            "Changing test 'default' from 'old command' to 'new command'",
         ]);
         assert_eq!(repo.get_test_command("default")?.value(), "new command");
         Ok(())
@@ -164,8 +170,8 @@ mod test_command_add {
         assert_eq!(
             get_log_contents(),
             vec![
-                "INFO - Changing test 'default' from '<empty>' to 'old command'",
-                "INFO - Changing test 'default' from 'old command' to 'new command'",
+                "Changing test 'default' from '<empty>' to 'old command'",
+                "Changing test 'default' from 'old command' to 'new command'",
             ]
         );
         assert_eq!(repo.get_test_command("default")?.value(), "new command");
@@ -184,8 +190,8 @@ mod test_command_add {
         assert_eq!(
             get_log_contents(),
             vec![
-                "INFO - Changing test 'default' from '<empty>' to 'old command'",
-                "INFO - Changing test 'default' from 'old command' to 'new command'"
+                "Changing test 'default' from '<empty>' to 'old command'",
+                "Changing test 'default' from 'old command' to 'new command'"
             ]
         );
         assert_eq!(repo.get_test_command("default")?.value(), "new command");
@@ -204,8 +210,8 @@ mod test_command_add {
         assert_eq!(
             get_log_contents(),
             vec![
-                "INFO - Changing test 'default' from '<empty>' to 'old command'",
-                "INFO - Changing test 'default' from 'old command' to 'new command'"
+                "Changing test 'default' from '<empty>' to 'old command'",
+                "Changing test 'default' from 'old command' to 'new command'"
             ]
         );
         assert_eq!(repo.get_test_command("default")?.value(), "new command");
@@ -216,15 +222,16 @@ mod test_command_add {
     fn test_add_existing_test_with_same_command() -> Result<()> {
         setup_logger();
         clear_log_contents();
+        set_color_enabled(false);
         let (_temp_dir, repo) = setup_test();
 
         cmd_add(&repo, "default", false, false, "same command")?;
         cmd_add(&repo, "default", false, false, "same command")?;
 
         assert_eq!(get_log_contents(), vec![
-            "INFO - Changing test 'default' from '<empty>' to 'same command'",
-            "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
-            "INFO - Changing test 'default' from 'same command' to 'same command'",
+            "Changing test 'default' from '<empty>' to 'same command'",
+            "Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
+            "Changing test 'default' from 'same command' to 'same command'",
         ]);
         assert_eq!(repo.get_test_command("default")?.value(), "same command");
         Ok(())
@@ -269,14 +276,14 @@ mod test_command_list {
 
         let log_contents = get_log_contents();
         let expected_logs = vec![
-            "INFO - default:",
-            "INFO -     command = just default",
-            "INFO - spotless-formats:",
-            "INFO -     command = just spotless formats",
-            "INFO - spotless-java-sort-imports:",
-            "INFO -     command = just spotless java-sort-imports",
-            "INFO - empty-command:",
-            "INFO -     command = ",
+            "default:",
+            "    command = just default",
+            "spotless-formats:",
+            "    command = just spotless formats",
+            "spotless-java-sort-imports:",
+            "    command = just spotless java-sort-imports",
+            "empty-command:",
+            "    command = ",
         ];
 
         assert_eq!(log_contents, expected_logs);
