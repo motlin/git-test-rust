@@ -3,6 +3,7 @@ use clap::Parser;
 
 pub mod log_util {
     use anyhow::Context;
+    use clap::ColorChoice;
     use log::{debug, LevelFilter};
     use simple_logger::SimpleLogger;
     use std::process::{Command, Output};
@@ -28,7 +29,7 @@ pub mod log_util {
         fn flush(&self) {}
     }
 
-    pub fn init_logging(verbosity: i8) -> anyhow::Result<()> {
+    pub fn init_logging(verbosity: i8, choice: ColorChoice) -> anyhow::Result<()> {
         let log_level = match verbosity {
             i8::MIN..=-2 => LevelFilter::Error,
             -1 => LevelFilter::Warn,
@@ -43,6 +44,15 @@ pub mod log_util {
             log::set_boxed_logger(Box::new(CustomLogger))?;
             log::set_max_level(log_level);
         }
+
+        use colored::control::set_override;
+
+        let colorize = match choice {
+            ColorChoice::Auto => atty::is(atty::Stream::Stdout),
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+        };
+        set_override(colorize);
 
         Ok(())
     }
@@ -175,8 +185,8 @@ pub mod git {
     }
 }
 
-mod cli {
-    use clap::{Args, Parser, Subcommand};
+pub mod cli {
+    use clap::{Args, ColorChoice, Parser, Subcommand};
 
     #[derive(Parser)]
     #[command(
@@ -219,11 +229,13 @@ mod cli {
         #[arg(short, long, global = true, action = clap::ArgAction::Count, help = "generate less verbose output (may be specified multiple times)")]
         pub quiet: u8,
 
-        #[arg(long, global = true, help = "print status with colors")]
-        pub color: bool,
-
-        #[arg(long, global = true, help = "print status without colors")]
-        pub no_color: bool,
+        #[arg(
+        long,
+        global = true,
+        help = "Control when to use colors: auto, always, never",
+        default_value_t = ColorChoice::Auto
+        )]
+        pub color: ColorChoice,
     }
 
     #[derive(Subcommand)]
@@ -522,15 +534,13 @@ pub fn main() -> Result<()> {
     use crate::git::get_repo_root;
     use crate::log_util::init_logging;
     use cli::{Cli, Commands};
+    use colored::control;
 
     let cli = Cli::parse();
 
-    // Set up colored output
-    colored::control::set_override(cli.color && !cli.no_color);
-
     // Calculate verbosity and set up logger
     let verbosity = cli.verbose as i8 - cli.quiet as i8;
-    init_logging(verbosity)?;
+    init_logging(verbosity, cli.color)?;
 
     // Get the repository root
     let current_dir = std::env::current_dir()?;

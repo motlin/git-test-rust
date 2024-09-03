@@ -73,6 +73,47 @@ pub mod test_git {
     }
 }
 
+pub mod test_cli {
+    use clap::{ColorChoice, Parser};
+    use git_test::cli::{Cli, Commands};
+
+    #[test]
+    fn test_color_default_is_auto() {
+        let cli = Cli::try_parse_from(&["git-test", "list"]).unwrap();
+        assert_eq!(cli.color, ColorChoice::Auto);
+    }
+
+    #[test]
+    fn test_color_always() {
+        let cli = Cli::try_parse_from(&["git-test", "--color", "always", "list"]).unwrap();
+        assert_eq!(cli.color, ColorChoice::Always);
+    }
+
+    #[test]
+    fn test_color_never() {
+        let cli = Cli::try_parse_from(&["git-test", "--color", "never", "list"]).unwrap();
+        assert_eq!(cli.color, ColorChoice::Never);
+    }
+
+    #[test]
+    fn test_invalid_color_choice() {
+        let result = Cli::try_parse_from(&["git-test", "--color", "invalid", "list"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_subcommand_parsing() {
+        let cli = Cli::try_parse_from(&["git-test", "list"]).unwrap();
+        assert!(matches!(cli.command, Commands::List));
+
+        let cli =
+            Cli::try_parse_from(&["git-test", "add", "--test", "default", "command"]).unwrap();
+        assert!(matches!(cli.command, Commands::Add(_)));
+
+        let cli = Cli::try_parse_from(&["git-test", "run", "--test", "default"]).unwrap();
+        assert!(matches!(cli.command, Commands::Run(_)));
+    }
+}
 mod test_command_add {
     use anyhow::Result;
 
