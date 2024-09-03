@@ -1,16 +1,55 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use log::{debug, LevelFilter};
-use simple_logger::SimpleLogger;
-use std::process::{Command, Output};
 
-fn log_and_run_command(command: &mut Command) -> Result<Output> {
-    debug!("Executing command: {:?}", command);
-    command.output().context("Failed to execute command")
+pub mod log_util {
+    use anyhow::Context;
+    use log::{debug, LevelFilter};
+    use simple_logger::SimpleLogger;
+    use std::process::{Command, Output};
+
+    pub(crate) fn log_and_run_command(command: &mut Command) -> anyhow::Result<Output> {
+        debug!("Executing command: {:?}", command);
+        command.output().context("Failed to execute command")
+    }
+
+    struct CustomLogger;
+
+    impl log::Log for CustomLogger {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                println!("{}", record.args());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    pub fn init_logging(verbosity: i8) -> anyhow::Result<()> {
+        let log_level = match verbosity {
+            i8::MIN..=-2 => LevelFilter::Error,
+            -1 => LevelFilter::Warn,
+            0 => LevelFilter::Info,
+            1 => LevelFilter::Debug,
+            2..=i8::MAX => LevelFilter::Trace,
+        };
+
+        if verbosity >= 3 {
+            SimpleLogger::new().with_level(log_level).init()?;
+        } else {
+            log::set_boxed_logger(Box::new(CustomLogger))?;
+            log::set_max_level(log_level);
+        }
+
+        Ok(())
+    }
 }
 
 pub mod git {
-    use crate::log_and_run_command;
+    use crate::log_util::log_and_run_command;
     use anyhow::{Context, Result};
     use regex::Regex;
     use std::path::{Path, PathBuf};
@@ -479,10 +518,11 @@ pub mod commands {
     pub use run::cmd_run;
 }
 
-use crate::git::get_repo_root;
-use cli::{Cli, Commands};
-
 pub fn main() -> Result<()> {
+    use crate::git::get_repo_root;
+    use crate::log_util::init_logging;
+    use cli::{Cli, Commands};
+
     let cli = Cli::parse();
 
     // Set up colored output
@@ -490,14 +530,7 @@ pub fn main() -> Result<()> {
 
     // Calculate verbosity and set up logger
     let verbosity = cli.verbose as i8 - cli.quiet as i8;
-    let log_level = match verbosity {
-        i8::MIN..=-2 => LevelFilter::Error,
-        -1 => LevelFilter::Warn,
-        0 => LevelFilter::Info,
-        1 => LevelFilter::Debug,
-        2..=i8::MAX => LevelFilter::Trace,
-    };
-    SimpleLogger::new().with_level(log_level).init()?;
+    init_logging(verbosity)?;
 
     // Get the repository root
     let current_dir = std::env::current_dir()?;
