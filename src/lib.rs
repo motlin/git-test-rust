@@ -1,9 +1,16 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use log::LevelFilter;
+use log::{debug, LevelFilter};
 use simple_logger::SimpleLogger;
+use std::process::{Command, Output};
+
+fn log_and_run_command(command: &mut Command) -> Result<Output> {
+    debug!("Executing command: {:?}", command);
+    command.output().context("Failed to execute command")
+}
 
 pub mod git {
+    use crate::log_and_run_command;
     use anyhow::{Context, Result};
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -34,12 +41,13 @@ pub mod git {
         }
 
         fn get_config_value(&self, key: &str) -> Result<String> {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(&self.root)
-                .args(&["config", "--get", key])
-                .output()
-                .context("Failed to execute git config --get")?;
+            let output = log_and_run_command(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(&self.root)
+                    .args(&["config", "--get", key]),
+            )
+            .context("Failed to execute git config --get")?;
 
             if output.status.success() {
                 Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -49,12 +57,12 @@ pub mod git {
         }
 
         pub fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
-            Command::new("git")
-                .arg("-C")
-                .arg(&self.root)
-                .args(&["config", &format!("test.{}.command", test), command])
-                .status()
-                .context("Failed to execute git config")?;
+            log_and_run_command(Command::new("git").arg("-C").arg(&self.root).args(&[
+                "config",
+                &format!("test.{}.command", test),
+                command,
+            ]))
+            .context("Failed to execute git config")?;
 
             Ok(())
         }
@@ -71,11 +79,13 @@ pub mod git {
     }
 
     pub fn get_repo_root(dir: &Path) -> Result<GitRepository> {
-        let output = Command::new("git")
-            .current_dir(dir)
-            .args(&["rev-parse", "--show-toplevel"])
-            .output()
-            .context("Failed to execute git rev-parse --show-toplevel")?;
+        let output = log_and_run_command(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(&["rev-parse", "--show-toplevel"]),
+        )
+        .context("Failed to execute git rev-parse --show-toplevel")?;
 
         if output.status.success() {
             let root = PathBuf::from(String::from_utf8(output.stdout)?.trim());

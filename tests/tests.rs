@@ -13,7 +13,7 @@ pub mod test_logging {
 
     impl log::Log for TestLogger {
         fn enabled(&self, metadata: &Metadata) -> bool {
-            metadata.level() <= Level::Debug
+            metadata.level() <= Level::Info
         }
 
         fn log(&self, record: &Record) {
@@ -31,7 +31,7 @@ pub mod test_logging {
     pub fn setup_logger() {
         INIT.call_once(|| {
             log::set_boxed_logger(Box::new(TestLogger))
-                .map(|()| log::set_max_level(LevelFilter::Debug))
+                .map(|()| log::set_max_level(LevelFilter::Info))
                 .unwrap();
         });
     }
