@@ -19,7 +19,7 @@ struct TestLogger;
 
 impl log::Log for TestLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Info
+        metadata.level() <= Level::Debug
     }
 
     fn log(&self, record: &Record) {
@@ -37,7 +37,7 @@ impl log::Log for TestLogger {
 fn setup_logger() {
     INIT.call_once(|| {
         log::set_boxed_logger(Box::new(TestLogger))
-            .map(|()| log::set_max_level(LevelFilter::Info))
+            .map(|()| log::set_max_level(LevelFilter::Debug))
             .unwrap();
     });
 }
@@ -81,9 +81,11 @@ fn test_add_new_test() -> Result<()> {
 
     let command = get_test_command(&repo_path, "default")?;
     assert_eq!(command, "just default");
-    assert!(get_log_contents()
-        .iter()
-        .any(|log| log.contains("INFO - Creating new test 'default'")));
+
+    assert_eq!(
+        get_log_contents(),
+        vec!["INFO - Changing test 'default' from '<empty>' to 'just default'",]
+    );
     Ok(())
 }
 
@@ -118,6 +120,12 @@ fn test_add_multiple_tests() -> Result<()> {
         get_test_command(&repo_path, "spotless-java-sort-imports")?,
         "just spotless java-sort-imports"
     );
+
+    assert_eq!(get_log_contents(), vec![
+        "INFO - Changing test 'default' from '<empty>' to 'just default'",
+        "INFO - Changing test 'spotless-formats' from '<empty>' to 'just spotless formats'",
+        "INFO - Changing test 'spotless-java-sort-imports' from '<empty>' to 'just spotless java-sort-imports'",
+    ]);
     Ok(())
 }
 
@@ -130,16 +138,11 @@ fn test_add_existing_test_no_flags() -> Result<()> {
     cmd_add(&repo_path, "default", false, false, "old command")?;
     cmd_add(&repo_path, "default", false, false, "new command")?;
 
-    let logs = get_log_contents();
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("WARN - Overwriting existing test 'default'")));
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - Existing command for test 'default': old command")));
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - New command for test 'default': new command")));
+    assert_eq!(get_log_contents(), vec![
+        "INFO - Changing test 'default' from '<empty>' to 'old command'",
+        "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
+        "INFO - Changing test 'default' from 'old command' to 'new command'",
+    ]);
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
@@ -153,13 +156,13 @@ fn test_add_existing_test_with_forget() -> Result<()> {
     cmd_add(&repo_path, "default", false, false, "old command")?;
     cmd_add(&repo_path, "default", true, false, "new command")?;
 
-    let logs = get_log_contents();
-    assert!(!logs
-        .iter()
-        .any(|log| log.contains("WARN - Overwriting existing test 'default'")));
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - Deleted stored results for test 'default'")));
+    assert_eq!(
+        get_log_contents(),
+        vec![
+            "INFO - Changing test 'default' from '<empty>' to 'old command'",
+            "INFO - Changing test 'default' from 'old command' to 'new command'",
+        ]
+    );
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
@@ -173,13 +176,13 @@ fn test_add_existing_test_with_keep() -> Result<()> {
     cmd_add(&repo_path, "default", false, false, "old command")?;
     cmd_add(&repo_path, "default", false, true, "new command")?;
 
-    let logs = get_log_contents();
-    assert!(!logs
-        .iter()
-        .any(|log| log.contains("WARN - Overwriting existing test 'default'")));
-    assert!(!logs
-        .iter()
-        .any(|log| log.contains("INFO - Deleted stored results for test 'default'")));
+    assert_eq!(
+        get_log_contents(),
+        vec![
+            "INFO - Changing test 'default' from '<empty>' to 'old command'",
+            "INFO - Changing test 'default' from 'old command' to 'new command'"
+        ]
+    );
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
@@ -193,13 +196,13 @@ fn test_add_existing_test_with_forget_and_keep() -> Result<()> {
     cmd_add(&repo_path, "default", false, false, "old command")?;
     cmd_add(&repo_path, "default", true, true, "new command")?;
 
-    let logs = get_log_contents();
-    assert!(!logs
-        .iter()
-        .any(|log| log.contains("WARN - Overwriting existing test 'default'")));
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - Deleted stored results for test 'default'")));
+    assert_eq!(
+        get_log_contents(),
+        vec![
+            "INFO - Changing test 'default' from '<empty>' to 'old command'",
+            "INFO - Changing test 'default' from 'old command' to 'new command'"
+        ]
+    );
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
@@ -213,13 +216,11 @@ fn test_add_existing_test_with_same_command() -> Result<()> {
     cmd_add(&repo_path, "default", false, false, "same command")?;
     cmd_add(&repo_path, "default", false, false, "same command")?;
 
-    let logs = get_log_contents();
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - Existing command for test 'default': same command")));
-    assert!(logs
-        .iter()
-        .any(|log| log.contains("INFO - New command for test 'default': same command")));
+    assert_eq!(get_log_contents(), vec![
+        "INFO - Changing test 'default' from '<empty>' to 'same command'",
+        "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
+        "INFO - Changing test 'default' from 'same command' to 'same command'",
+    ]);
     assert_eq!(get_test_command(&repo_path, "default")?, "same command");
     Ok(())
 }
@@ -232,4 +233,6 @@ fn test_add_nonexistent_test() {
 
     let result = get_test_command(&repo_path, "nonexistent");
     assert!(result.is_err());
+
+    assert_eq!(get_log_contents(), Vec::<String>::new());
 }

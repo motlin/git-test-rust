@@ -13,35 +13,30 @@ pub fn cmd_add(
 ) -> Result<()> {
     // Check if the test already exists
     let existing_command = git::get_test_command(repo_root, test);
+    let had_existing_command = existing_command.is_ok();
 
-    match existing_command {
-        Ok(existing_cmd) => {
-            info!("Existing command for test '{}': {}", test, existing_cmd);
-            info!("New command for test '{}': {}", test, command);
+    let old_command = existing_command.unwrap_or_else(|_| "<empty>".to_string());
 
-            if !forget && !keep {
-                warn!(
+    if !forget && !keep && had_existing_command {
+        warn!(
                     "Overwriting existing test '{}'. Use --forget to delete stored results or --keep to preserve them.",
                     test
                 );
-            }
+    }
 
-            if forget {
-                forget_results(repo_root, test)
-                    .with_context(|| format!("Failed to delete stored results for '{}'", test))?;
-                info!("Deleted stored results for test '{}'", test);
-            }
-        }
-        Err(_) => {
-            info!("Creating new test '{}'", test);
-        }
+    if forget {
+        forget_results(repo_root, test)
+            .with_context(|| format!("Failed to delete stored results for '{}'", test))?;
     }
 
     // Set the new test command
     git::set_test_command(repo_root, test, command)
         .with_context(|| format!("Failed to set test command for '{}'", test))?;
 
-    info!("Set test '{}' with command: {}", test, command);
+    info!(
+        "Changing test '{}' from '{}' to '{}'",
+        test, old_command, command
+    );
 
     Ok(())
 }
