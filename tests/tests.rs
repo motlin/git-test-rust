@@ -48,23 +48,24 @@ pub mod test_logging {
 }
 
 pub mod test_git {
-    use std::path::PathBuf;
-    use std::process::Command;
+    use git_test::git::{get_repo_root, GitRepository};
+    use std::path::Path;
     use tempfile::TempDir;
 
-    pub fn init_git_repo(temp_dir: &PathBuf) {
-        Command::new("git")
+    pub fn init_git_repo(temp_dir: &Path) {
+        std::process::Command::new("git")
             .args(&["init"])
             .current_dir(temp_dir)
             .status()
             .unwrap();
     }
 
-    pub fn setup_test() -> (TempDir, PathBuf) {
+    pub fn setup_test() -> (TempDir, GitRepository) {
         let temp_dir = TempDir::new().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-        init_git_repo(&repo_path);
-        (temp_dir, repo_path)
+        let repo_path = temp_dir.path();
+        init_git_repo(repo_path);
+        let repo = get_repo_root(repo_path).unwrap();
+        (temp_dir, repo)
     }
 }
 
@@ -74,18 +75,17 @@ mod test_command_add {
     use crate::test_git::setup_test;
     use crate::test_logging::{clear_log_contents, get_log_contents, setup_logger};
     use git_test::commands::add::cmd_add;
-    use git_test::git;
 
     #[test]
     fn test_add_new_test() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "just default")?;
+        cmd_add(&repo, "default", false, false, "just default")?;
 
-        let command = git::get_test_command(&repo_path, "default")?;
-        assert_eq!(command, "just default");
+        let command = repo.get_test_command("default")?;
+        assert_eq!(command.value(), "just default");
 
         assert_eq!(
             get_log_contents(),
@@ -98,34 +98,31 @@ mod test_command_add {
     fn test_add_multiple_tests() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "just default")?;
+        cmd_add(&repo, "default", false, false, "just default")?;
         cmd_add(
-            &repo_path,
+            &repo,
             "spotless-formats",
             false,
             false,
             "just spotless formats",
         )?;
         cmd_add(
-            &repo_path,
+            &repo,
             "spotless-java-sort-imports",
             false,
             false,
             "just spotless java-sort-imports",
         )?;
 
+        assert_eq!(repo.get_test_command("default")?.value(), "just default");
         assert_eq!(
-            git::get_test_command(&repo_path, "default")?,
-            "just default"
-        );
-        assert_eq!(
-            git::get_test_command(&repo_path, "spotless-formats")?,
+            repo.get_test_command("spotless-formats")?.value(),
             "just spotless formats"
         );
         assert_eq!(
-            git::get_test_command(&repo_path, "spotless-java-sort-imports")?,
+            repo.get_test_command("spotless-java-sort-imports")?.value(),
             "just spotless java-sort-imports"
         );
 
@@ -141,17 +138,17 @@ mod test_command_add {
     fn test_add_existing_test_no_flags() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "old command")?;
-        cmd_add(&repo_path, "default", false, false, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command")?;
+        cmd_add(&repo, "default", false, false, "new command")?;
 
         assert_eq!(get_log_contents(), vec![
             "INFO - Changing test 'default' from '<empty>' to 'old command'",
             "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
             "INFO - Changing test 'default' from 'old command' to 'new command'",
         ]);
-        assert_eq!(git::get_test_command(&repo_path, "default")?, "new command");
+        assert_eq!(repo.get_test_command("default")?.value(), "new command");
         Ok(())
     }
 
@@ -159,10 +156,10 @@ mod test_command_add {
     fn test_add_existing_test_with_forget() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "old command")?;
-        cmd_add(&repo_path, "default", true, false, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command")?;
+        cmd_add(&repo, "default", true, false, "new command")?;
 
         assert_eq!(
             get_log_contents(),
@@ -171,7 +168,7 @@ mod test_command_add {
                 "INFO - Changing test 'default' from 'old command' to 'new command'",
             ]
         );
-        assert_eq!(git::get_test_command(&repo_path, "default")?, "new command");
+        assert_eq!(repo.get_test_command("default")?.value(), "new command");
         Ok(())
     }
 
@@ -179,10 +176,10 @@ mod test_command_add {
     fn test_add_existing_test_with_keep() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "old command")?;
-        cmd_add(&repo_path, "default", false, true, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command")?;
+        cmd_add(&repo, "default", false, true, "new command")?;
 
         assert_eq!(
             get_log_contents(),
@@ -191,7 +188,7 @@ mod test_command_add {
                 "INFO - Changing test 'default' from 'old command' to 'new command'"
             ]
         );
-        assert_eq!(git::get_test_command(&repo_path, "default")?, "new command");
+        assert_eq!(repo.get_test_command("default")?.value(), "new command");
         Ok(())
     }
 
@@ -199,10 +196,10 @@ mod test_command_add {
     fn test_add_existing_test_with_forget_and_keep() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "old command")?;
-        cmd_add(&repo_path, "default", true, true, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command")?;
+        cmd_add(&repo, "default", true, true, "new command")?;
 
         assert_eq!(
             get_log_contents(),
@@ -211,7 +208,7 @@ mod test_command_add {
                 "INFO - Changing test 'default' from 'old command' to 'new command'"
             ]
         );
-        assert_eq!(git::get_test_command(&repo_path, "default")?, "new command");
+        assert_eq!(repo.get_test_command("default")?.value(), "new command");
         Ok(())
     }
 
@@ -219,20 +216,17 @@ mod test_command_add {
     fn test_add_existing_test_with_same_command() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        cmd_add(&repo_path, "default", false, false, "same command")?;
-        cmd_add(&repo_path, "default", false, false, "same command")?;
+        cmd_add(&repo, "default", false, false, "same command")?;
+        cmd_add(&repo, "default", false, false, "same command")?;
 
         assert_eq!(get_log_contents(), vec![
             "INFO - Changing test 'default' from '<empty>' to 'same command'",
             "WARN - Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
             "INFO - Changing test 'default' from 'same command' to 'same command'",
         ]);
-        assert_eq!(
-            git::get_test_command(&repo_path, "default")?,
-            "same command"
-        );
+        assert_eq!(repo.get_test_command("default")?.value(), "same command");
         Ok(())
     }
 
@@ -240,9 +234,9 @@ mod test_command_add {
     fn test_add_nonexistent_test() {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo_path) = setup_test();
+        let (_temp_dir, repo) = setup_test();
 
-        let result = git::get_test_command(&repo_path, "nonexistent");
+        let result = repo.get_test_command("nonexistent");
         assert!(result.is_err());
 
         assert_eq!(get_log_contents(), Vec::<String>::new());

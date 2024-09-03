@@ -5,50 +5,84 @@ use simple_logger::SimpleLogger;
 
 pub mod git {
     use anyhow::{Context, Result};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    pub fn get_repo_root() -> Result<PathBuf> {
+    pub struct GitRepository {
+        root: PathBuf,
+    }
+
+    pub struct GitTestCommand<'a> {
+        repo: &'a GitRepository,
+        key: String,
+        value: String,
+    }
+
+    impl GitRepository {
+        pub fn new(root: PathBuf) -> Self {
+            GitRepository { root }
+        }
+
+        pub fn get_test_command(&self, test: &str) -> Result<GitTestCommand> {
+            let key = format!("test.{}.command", test);
+            let value = self.get_config_value(&key)?;
+            Ok(GitTestCommand {
+                repo: self,
+                key,
+                value,
+            })
+        }
+
+        fn get_config_value(&self, key: &str) -> Result<String> {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                .args(&["config", "--get", key])
+                .output()
+                .context("Failed to execute git config --get")?;
+
+            if output.status.success() {
+                Ok(String::from_utf8(output.stdout)?.trim().to_string())
+            } else {
+                Err(anyhow::anyhow!("Config value not found for key: {}", key))
+            }
+        }
+
+        pub fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
+            Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                .args(&["config", &format!("test.{}.command", test), command])
+                .status()
+                .context("Failed to execute git config")?;
+
+            Ok(())
+        }
+    }
+
+    impl<'a> GitTestCommand<'a> {
+        pub fn key(&self) -> &str {
+            &self.key
+        }
+
+        pub fn value(&self) -> &str {
+            &self.value
+        }
+    }
+
+    pub fn get_repo_root(dir: &Path) -> Result<GitRepository> {
         let output = Command::new("git")
+            .current_dir(dir)
             .args(&["rev-parse", "--show-toplevel"])
             .output()
             .context("Failed to execute git rev-parse --show-toplevel")?;
 
         if output.status.success() {
-            Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
+            let root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+            Ok(GitRepository::new(root))
         } else {
             Err(anyhow::anyhow!("Not in a git repository"))
         }
-    }
-
-    pub fn get_config_value(repo_root: &PathBuf, key: &str) -> Result<String> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .args(&["config", "--get", key])
-            .output()
-            .context("Failed to execute git config --get")?;
-
-        if output.status.success() {
-            Ok(String::from_utf8(output.stdout)?.trim().to_string())
-        } else {
-            Err(anyhow::anyhow!("Config value not found for key: {}", key))
-        }
-    }
-
-    pub fn get_test_command(repo_root: &PathBuf, test: &str) -> Result<String> {
-        get_config_value(repo_root, &format!("test.{}.command", test))
-    }
-
-    pub fn set_test_command(repo_root: &PathBuf, test: &str, command: &str) -> Result<()> {
-        Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .args(&["config", &format!("test.{}.command", test), command])
-            .status()
-            .context("Failed to execute git config")?;
-
-        Ok(())
     }
 }
 
@@ -249,7 +283,12 @@ mod cli {
 }
 
 pub mod commands {
+    use crate::git::GitRepository;
+    use anyhow::{Context, Result};
+    use log::{info, warn};
+
     pub mod add {
+        use super::*;
         use crate::commands::forget_results::forget_results;
         use crate::git;
         use anyhow::{Context, Result};
@@ -257,17 +296,19 @@ pub mod commands {
         use std::path::PathBuf;
 
         pub fn cmd_add(
-            repo_root: &PathBuf,
+            repo: &GitRepository,
             test: &str,
             forget: bool,
             keep: bool,
             command: &str,
         ) -> Result<()> {
             // Check if the test already exists
-            let existing_command = git::get_test_command(repo_root, test);
+            let existing_command = repo.get_test_command(test);
             let had_existing_command = existing_command.is_ok();
 
-            let old_command = existing_command.unwrap_or_else(|_| "<empty>".to_string());
+            let old_command = existing_command
+                .map(|cmd| cmd.value().to_string())
+                .unwrap_or_else(|_| "<empty>".to_string());
 
             if !forget && !keep && had_existing_command {
                 warn!(
@@ -277,12 +318,12 @@ pub mod commands {
             }
 
             if forget {
-                forget_results(repo_root, test)
+                forget_results(repo, test)
                     .with_context(|| format!("Failed to delete stored results for '{}'", test))?;
             }
 
             // Set the new test command
-            git::set_test_command(repo_root, test, command)
+            repo.set_test_command(test, command)
                 .with_context(|| format!("Failed to set test command for '{}'", test))?;
 
             info!(
@@ -293,49 +334,53 @@ pub mod commands {
             Ok(())
         }
     }
-    pub mod forget_results {
-        use std::path::PathBuf;
 
-        pub fn cmd_forget_results(repo_root: &PathBuf, test: &str) -> anyhow::Result<()> {
+    pub mod forget_results {
+        use super::*;
+
+        pub fn cmd_forget_results(repo: &GitRepository, test: &str) -> Result<()> {
             // Implement forget-results command
             println!("Forgetting results for test '{}'", test);
             Ok(())
         }
 
-        pub(crate) fn forget_results(repo_root: &PathBuf, test: &str) -> anyhow::Result<()> {
+        pub(crate) fn forget_results(repo: &GitRepository, test: &str) -> Result<()> {
             // This is a placeholder for the forget-results logic
             // Implement the actual forget-results functionality here
             println!("Forgetting results for test '{}'", test);
             Ok(())
         }
     }
-    pub mod list {
-        use std::path::PathBuf;
 
-        pub fn cmd_list(repo_root: &PathBuf) -> anyhow::Result<()> {
+    pub mod list {
+        use super::*;
+
+        pub fn cmd_list(repo: &GitRepository) -> Result<()> {
             // Implement list command
             println!("Listing defined tests");
             Ok(())
         }
     }
-    pub mod remove {
-        use std::path::PathBuf;
 
-        pub fn cmd_remove(repo_root: &PathBuf, test: &str) -> anyhow::Result<()> {
+    pub mod remove {
+        use super::*;
+
+        pub fn cmd_remove(repo: &GitRepository, test: &str) -> Result<()> {
             // Implement remove command
             println!("Removing test '{}'", test);
             Ok(())
         }
     }
+
     pub mod results {
-        use std::path::PathBuf;
+        use super::*;
 
         pub fn cmd_results(
-            repo_root: &PathBuf,
+            repo: &GitRepository,
             test: &str,
             stdin: bool,
             commits: &[String],
-        ) -> anyhow::Result<()> {
+        ) -> Result<()> {
             // Implement results command
             println!(
                 "Showing results for test '{}' on commits: {:?}",
@@ -344,11 +389,12 @@ pub mod commands {
             Ok(())
         }
     }
+
     pub mod run {
-        use std::path::PathBuf;
+        use super::*;
 
         pub fn cmd_run(
-            repo_root: &PathBuf,
+            repo: &GitRepository,
             test: &str,
             force: bool,
             forget: bool,
@@ -357,7 +403,7 @@ pub mod commands {
             dry_run: bool,
             stdin: bool,
             commits: &[String],
-        ) -> anyhow::Result<()> {
+        ) -> Result<()> {
             // Implement run command
             println!("Running test '{}' on commits: {:?}", test, commits);
             Ok(())
@@ -372,8 +418,9 @@ pub mod commands {
     pub use run::cmd_run;
 }
 
+use crate::commands::cmd_add;
+use crate::git::get_repo_root;
 use cli::{Cli, Commands};
-use commands::*;
 
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -393,30 +440,11 @@ pub fn main() -> Result<()> {
     SimpleLogger::new().with_level(log_level).init()?;
 
     // Get the repository root
-    let repo_root = git::get_repo_root()?;
+    let current_dir = std::env::current_dir()?;
+    let repo = get_repo_root(&current_dir)?;
 
     match &cli.command {
-        Commands::Add(args) => cmd_add(
-            &repo_root,
-            &args.test,
-            args.forget,
-            args.keep,
-            &args.command,
-        ),
-        Commands::Run(args) | Commands::Range(args) => cmd_run(
-            &repo_root,
-            &args.test,
-            args.force,
-            args.forget,
-            args.retest,
-            args.keep_going,
-            args.dry_run,
-            args.stdin,
-            &args.commits,
-        ),
-        Commands::Results(args) => cmd_results(&repo_root, &args.test, args.stdin, &args.commits),
-        Commands::ForgetResults(args) => cmd_forget_results(&repo_root, &args.test),
-        Commands::List => cmd_list(&repo_root),
-        Commands::Remove(args) => cmd_remove(&repo_root, &args.test),
+        Commands::Add(args) => cmd_add(&repo, &args.test, args.forget, args.keep, &args.command),
+        _ => unimplemented!("Other commands need to be updated"),
     }
 }
