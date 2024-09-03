@@ -1,12 +1,6 @@
-use std::io::Write;
 use std::path::PathBuf;
 
-pub fn cmd_forget_results<W: Write>(
-    repo_root: &PathBuf,
-    test: &str,
-    verbosity: i8,
-    writer: &mut W,
-) -> anyhow::Result<()> {
+pub fn cmd_forget_results(repo_root: &PathBuf, test: &str) -> anyhow::Result<()> {
     // Implement forget-results command
     println!("Forgetting results for test '{}'", test);
     Ok(())
