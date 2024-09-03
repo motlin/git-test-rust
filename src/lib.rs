@@ -491,11 +491,11 @@ pub fn main() -> Result<()> {
     // Calculate verbosity and set up logger
     let verbosity = cli.verbose as i8 - cli.quiet as i8;
     let log_level = match verbosity {
-        i8::MIN..=-1 => LevelFilter::Error,
-        0 => LevelFilter::Warn,
-        1 => LevelFilter::Info,
-        2 => LevelFilter::Debug,
-        3..=i8::MAX => LevelFilter::Trace,
+        i8::MIN..=-2 => LevelFilter::Error,
+        -1 => LevelFilter::Warn,
+        0 => LevelFilter::Info,
+        1 => LevelFilter::Debug,
+        2..=i8::MAX => LevelFilter::Trace,
     };
     SimpleLogger::new().with_level(log_level).init()?;
 
