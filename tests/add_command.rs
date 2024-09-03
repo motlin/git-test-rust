@@ -62,12 +62,13 @@ fn test_add_new_test() -> Result<()> {
         false,
         false,
         "just default",
-        0,
+        1,
         &mut writer,
     )?;
 
     let command = get_test_command(&repo_path, "default")?;
     assert_eq!(command, "just default");
+    assert!(writer.contents().contains("Creating new test 'default'"));
     Ok(())
 }
 
@@ -117,34 +118,17 @@ fn test_add_multiple_tests() -> Result<()> {
 }
 
 #[test]
-fn test_add_existing_test() -> Result<()> {
+fn test_add_existing_test_no_flags() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
-    cmd_add(
-        &repo_path,
-        "default",
-        false,
-        false,
-        "just default",
-        0,
-        &mut writer,
-    )?;
-    cmd_add(
-        &repo_path,
-        "default",
-        false,
-        false,
-        "new command",
-        0,
-        &mut writer,
-    )?;
+    cmd_add(&repo_path, "default", false, false, "old command", 1, &mut writer)?;
+    cmd_add(&repo_path, "default", false, false, "new command", 1, &mut writer)?;
 
     let output = writer.contents();
-    assert!(
-        output.contains("WARNING: there are already results stored for the test named 'default'")
-    );
-
+    assert!(output.contains("WARNING: Overwriting existing test 'default'"));
+    assert!(output.contains("Existing command for test 'default': old command"));
+    assert!(output.contains("New command for test 'default': new command"));
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
@@ -154,58 +138,58 @@ fn test_add_existing_test_with_forget() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
-    cmd_add(
-        &repo_path,
-        "default",
-        false,
-        false,
-        "just default",
-        0,
-        &mut writer,
-    )?;
-    cmd_add(
-        &repo_path,
-        "default",
-        true,
-        false,
-        "new command",
-        0,
-        &mut writer,
-    )?;
+    cmd_add(&repo_path, "default", false, false, "old command", 1, &mut writer)?;
+    cmd_add(&repo_path, "default", true, false, "new command", 1, &mut writer)?;
 
+    let output = writer.contents();
+    assert!(!output.contains("WARNING: Overwriting existing test 'default'"));
+    assert!(output.contains("Deleted stored results for test 'default'"));
     assert_eq!(get_test_command(&repo_path, "default")?, "new command");
     Ok(())
 }
+
+#[test]
+fn test_add_existing_test_with_keep() -> Result<()> {
+    let (_temp_dir, repo_path) = setup_test();
+
+    let mut writer = TestWriter::new();
+    cmd_add(&repo_path, "default", false, false, "old command", 1, &mut writer)?;
+    cmd_add(&repo_path, "default", false, true, "new command", 1, &mut writer)?;
+
+    let output = writer.contents();
+    assert!(!output.contains("WARNING: Overwriting existing test 'default'"));
+    assert!(!output.contains("Deleted stored results for test 'default'"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "new command");
+    Ok(())
+}
+
+#[test]
+fn test_add_existing_test_with_forget_and_keep() -> Result<()> {
+    let (_temp_dir, repo_path) = setup_test();
+
+    let mut writer = TestWriter::new();
+    cmd_add(&repo_path, "default", false, false, "old command", 1, &mut writer)?;
+    cmd_add(&repo_path, "default", true, true, "new command", 1, &mut writer)?;
+
+    let output = writer.contents();
+    assert!(!output.contains("WARNING: Overwriting existing test 'default'"));
+    assert!(output.contains("Deleted stored results for test 'default'"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "new command");
+    Ok(())
+}
+
 #[test]
 fn test_add_existing_test_with_same_command() -> Result<()> {
     let (_temp_dir, repo_path) = setup_test();
 
     let mut writer = TestWriter::new();
-    cmd_add(
-        &repo_path,
-        "default",
-        false,
-        false,
-        "just default",
-        1,
-        &mut writer,
-    )?;
-    cmd_add(
-        &repo_path,
-        "default",
-        false,
-        false,
-        "just default",
-        1,
-        &mut writer,
-    )?;
+    cmd_add(&repo_path, "default", false, false, "same command", 1, &mut writer)?;
+    cmd_add(&repo_path, "default", false, false, "same command", 1, &mut writer)?;
 
     let output = writer.contents();
-    assert!(
-        output.contains("Test 'default' already exists with the same command. No changes made.")
-    );
-
-    assert_eq!(get_test_command(&repo_path, "default")?, "just default");
+    assert!(output.contains("Existing command for test 'default': same command"));
+    assert!(output.contains("New command for test 'default': same command"));
+    assert_eq!(get_test_command(&repo_path, "default")?, "same command");
     Ok(())
 }
 

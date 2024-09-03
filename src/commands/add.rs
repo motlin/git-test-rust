@@ -18,32 +18,33 @@ pub fn cmd_add<W: Write>(
 
     match existing_command {
         Ok(existing_cmd) => {
-            if existing_cmd == command {
+            if verbosity > 0 {
                 writeln!(
                     writer,
-                    "Test '{}' already exists with the same command. No changes made.",
-                    test
-                )?;
-                return Ok(());
-            }
-
-            if !forget {
-                writeln!(
-                    writer,
-                    "WARNING: there are already results stored for the test named '{}'",
-                    test
+                    "Existing command for test '{}': {}",
+                    test, existing_cmd
                 )?;
                 writeln!(
                     writer,
-                    "Use --forget to overwrite the existing test and delete all stored results"
+                    "New command for test '{}': {}",
+                    test, command
                 )?;
             }
 
-            if !keep {
-                // TODO: Implement logic to delete stored results
-                writeln!(writer, "Deleting stored results for test '{}'", test)?;
+            if !forget && !keep {
+                writeln!(
+                    writer,
+                    "WARNING: Overwriting existing test '{}'. Use --forget to delete stored results or --keep to preserve them.",
+                    test
+                )?;
+            }
+
+            if forget {
                 forget_results(repo_root, test)
                     .with_context(|| format!("Failed to delete stored results for '{}'", test))?;
+                if verbosity > 0 {
+                    writeln!(writer, "Deleted stored results for test '{}'", test)?;
+                }
             }
         }
         Err(_) => {
@@ -58,7 +59,7 @@ pub fn cmd_add<W: Write>(
         .with_context(|| format!("Failed to set test command for '{}'", test))?;
 
     if verbosity > 0 {
-        writeln!(writer, "Added test '{}' with command: {}", test, command)?;
+        writeln!(writer, "Set test '{}' with command: {}", test, command)?;
     }
 
     Ok(())

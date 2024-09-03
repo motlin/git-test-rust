@@ -82,10 +82,15 @@ pub struct AddArgs {
     )]
     pub test: String,
 
-    #[arg(long, help = "forget any existing results")]
+    #[arg(long, help = "forget any existing results", conflicts_with = "keep")]
     pub forget: bool,
 
-    #[arg(long, help = "keep any existing results (default)")]
+    #[arg(
+        long,
+        help = "keep any existing results (default)",
+        conflicts_with = "forget",
+        default_value_t = true
+    )]
     pub keep: bool,
 
     #[arg(help = "command to run")]
