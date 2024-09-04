@@ -122,15 +122,24 @@ pub mod git {
         root: PathBuf,
     }
 
-    pub struct GitTestCommand<'a> {
-        repo: &'a GitRepository,
-        key: String,
-        value: String,
+    #[derive(Clone)]
+    pub struct GitTestCommand {
+        pub repo: GitRepository,
+        pub test_name: String,
+        pub test_command: String,
     }
 
     impl GitRepository {
         pub fn new(root: PathBuf) -> Self {
             GitRepository { root }
+        }
+
+        pub fn test_command(&self, test_name: String, test_command: String) -> GitTestCommand {
+            GitTestCommand {
+                repo: self.clone(),
+                test_name,
+                test_command,
+            }
         }
 
         pub async fn get_repo_root(dir: &Path) -> Result<Self> {
@@ -163,18 +172,12 @@ pub mod git {
             Ok(())
         }
 
-        pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand<'_>> {
-            let key = format!("test.{}.command", test);
-            let command = self.get_config_value(&key).await;
-
-            match command {
-                Ok(command) => Ok(GitTestCommand {
-                    repo: self,
-                    key: test.to_string(),
-                    value: command,
-                }),
-                _ => Err(anyhow::anyhow!("Test '{}' is not defined", test)),
-            }
+        pub async fn get_test_command(&self, test_name: &str) -> Result<GitTestCommand> {
+            let key = format!("test.{}.command", test_name);
+            self.get_config_value(&key)
+                .await
+                .map(|test_command| self.test_command(test_name.to_string(), test_command))
+                .with_context(|| format!("Test '{}' is not defined", test_name))
         }
 
         pub async fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
@@ -182,28 +185,34 @@ pub mod git {
                 .await
         }
 
-        pub async fn list_tests(&self) -> Result<Vec<(String, String)>> {
+        pub async fn list_tests(&self) -> Result<Vec<GitTestCommand>> {
             let output = self
                 .run_git(&["config", "--get-regexp", "--null", r"^test\..*\.command$"])
                 .await?;
 
-            let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$").unwrap();
+            let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$")
+                .context("Failed to compile test config regex")?;
 
-            let tests = output
+            output
                 .split('\0')
                 .filter_map(|entry| {
                     let mut parts = entry.splitn(2, '\n');
                     match (parts.next(), parts.next()) {
-                        (Some(key), Some(value)) => test_config_re.captures(key).map(|captures| {
-                            let name = captures.name("name").unwrap().as_str().to_string();
-                            (name, value.to_string())
-                        }),
+                        (Some(key), Some(test_command)) => {
+                            test_config_re.captures(key).map(|captures| {
+                                captures.name("name").map(|name_match| {
+                                    self.test_command(
+                                        name_match.as_str().to_string(),
+                                        test_command.to_string(),
+                                    )
+                                })
+                            })
+                        }
                         _ => None,
                     }
                 })
-                .collect();
-
-            Ok(tests)
+                .collect::<Option<Vec<GitTestCommand>>>()
+                .context("Failed to parse git config output")
         }
 
         pub async fn get_head_commit(&self) -> Result<String> {
@@ -218,16 +227,6 @@ pub mod git {
             ])
             .await?;
             Ok(())
-        }
-    }
-
-    impl<'a> GitTestCommand<'a> {
-        pub fn key(&self) -> &str {
-            &self.key
-        }
-
-        pub fn value(&self) -> &str {
-            &self.value
         }
     }
 
@@ -483,7 +482,7 @@ pub mod commands {
             let had_existing_command = existing_command.is_ok();
 
             let old_command = existing_command
-                .map(|cmd| cmd.value().to_string())
+                .map(|cmd| cmd.test_command.to_string())
                 .unwrap_or_else(|_| "<empty>".to_string());
 
             if !forget && !keep && had_existing_command {
@@ -539,9 +538,9 @@ pub mod commands {
             if tests.is_empty() {
                 warn!("No tests defined.");
             } else {
-                for (test_name, command) in tests {
-                    info!("{}:", test_name.bold());
-                    info!("    command = {}", command.green());
+                for git_test_command in tests {
+                    info!("{}:", git_test_command.test_name.bold());
+                    info!("    command = {}", git_test_command.test_command.green());
                 }
             }
 
@@ -579,6 +578,7 @@ pub mod commands {
 
     pub mod run {
         use super::*;
+        use crate::git::GitTestCommand;
         use crate::log_util::log_and_run_command;
         use std::path::Path;
         use tokio::process::Command;
@@ -600,13 +600,10 @@ pub mod commands {
                 anyhow::bail!("Cannot specify both --test and --all");
             }
 
-            let tests = if all {
+            let tests: Vec<GitTestCommand> = if all {
                 repo.list_tests().await?
             } else if let Some(test_name) = test {
-                vec![(
-                    test_name.to_string(),
-                    repo.get_test_command(test_name).await?.value().to_string(),
-                )]
+                vec![repo.get_test_command(test_name).await?]
             } else {
                 anyhow::bail!("Must specify either --test or --all");
             };
@@ -625,8 +622,7 @@ pub mod commands {
             };
 
             for commit in commits {
-                let test_results =
-                    run_tests_for_commit(repo, &commit, &tests, &worktree_base).await?;
+                let test_results = run_tests_for_commit(&tests, &commit, &worktree_base).await?;
                 update_git_notes(repo, &commit, &test_results).await?;
             }
 
@@ -634,23 +630,19 @@ pub mod commands {
         }
 
         async fn run_tests_for_commit(
-            repo: &GitRepository,
+            tests: &[GitTestCommand],
             commit: &str,
-            tests: &[(String, String)],
             worktree_base: &Path,
         ) -> Result<Vec<TestResult>> {
             let tasks: Vec<_> = tests
                 .iter()
-                .map(|(test_name, test_command)| {
-                    let repo = repo.clone();
+                .map(|git_test_command| {
+                    let git_test_command = git_test_command.clone();
                     let commit = commit.to_string();
-                    let test_name = test_name.clone();
-                    let test_command = test_command.clone();
                     let worktree_base = worktree_base.to_path_buf();
 
                     tokio::spawn(async move {
-                        run_single_test(&repo, &commit, &test_name, &test_command, &worktree_base)
-                            .await
+                        run_single_test(&git_test_command, &commit, &worktree_base).await
                     })
                 })
                 .collect();
@@ -664,11 +656,13 @@ pub mod commands {
                 .collect::<Result<Vec<_>, _>>()
         }
 
-        async fn run_single_test(
-            repo: &GitRepository,
+        async fn run_single_test<'a>(
+            GitTestCommand {
+                repo,
+                test_name,
+                test_command,
+            }: &GitTestCommand,
             commit: &str,
-            test_name: &str,
-            test_command: &str,
             worktree_base: &Path,
         ) -> Result<TestResult> {
             let worktree_path = worktree_base.join(format!("{}/{}", commit, test_name));

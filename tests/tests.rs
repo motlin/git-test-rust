@@ -132,7 +132,7 @@ mod test_command_add {
         cmd_add(&repo, "default", false, false, "just default").await?;
 
         let command = repo.get_test_command("default").await?;
-        assert_eq!(command.value(), "just default");
+        assert_eq!(command.test_command, "just default");
 
         assert_eq!(
             get_log_contents(),
@@ -166,17 +166,19 @@ mod test_command_add {
         .await?;
 
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "just default"
         );
         assert_eq!(
-            repo.get_test_command("spotless-formats").await?.value(),
+            repo.get_test_command("spotless-formats")
+                .await?
+                .test_command,
             "just spotless formats"
         );
         assert_eq!(
             repo.get_test_command("spotless-java-sort-imports")
                 .await?
-                .value(),
+                .test_command,
             "just spotless java-sort-imports"
         );
 
@@ -203,7 +205,7 @@ mod test_command_add {
             "Changing test 'default' from 'old command' to 'new command'",
         ]);
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "new command"
         );
         Ok(())
@@ -226,7 +228,7 @@ mod test_command_add {
             ]
         );
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "new command"
         );
         Ok(())
@@ -249,7 +251,7 @@ mod test_command_add {
             ]
         );
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "new command"
         );
         Ok(())
@@ -272,7 +274,7 @@ mod test_command_add {
             ]
         );
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "new command"
         );
         Ok(())
@@ -294,7 +296,7 @@ mod test_command_add {
             "Changing test 'default' from 'same command' to 'same command'",
         ]);
         assert_eq!(
-            repo.get_test_command("default").await?.value(),
+            repo.get_test_command("default").await?.test_command,
             "same command"
         );
         Ok(())
