@@ -99,7 +99,23 @@ pub mod git {
     use anyhow::{Context, Result};
     use regex::Regex;
     use std::path::{Path, PathBuf};
+    use std::process::Output;
     use tokio::process::Command;
+
+    async fn run_git_with_output(root: &Path, args: &[&str]) -> Result<Output> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(root).args(args);
+        log_and_run_command(&mut cmd).await
+    }
+
+    pub async fn run_git_with_string(root: &Path, args: &[&str]) -> Result<String> {
+        let output = run_git_with_output(root, args).await?;
+        if output.status.success() {
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        } else {
+            Err(anyhow::anyhow!("Git command failed: {:?}", args))
+        }
+    }
 
     #[derive(Clone)]
     pub struct GitRepository {
@@ -117,23 +133,21 @@ pub mod git {
             GitRepository { root }
         }
 
+        pub async fn get_repo_root(dir: &Path) -> Result<Self> {
+            let root = run_git_with_string(dir, &["rev-parse", "--show-toplevel"])
+                .await
+                .context("Failed to execute git rev-parse --show-toplevel")?;
+
+            let root = PathBuf::from(root.trim());
+            Ok(GitRepository::new(root))
+        }
+
         pub fn root(&self) -> &Path {
             &self.root
         }
 
         pub async fn run_git(&self, args: &[&str]) -> Result<String> {
-            let output = self.run_git_with_output(args).await?;
-            if output.status.success() {
-                Ok(String::from_utf8(output.stdout)?.trim().to_string())
-            } else {
-                Err(anyhow::anyhow!("Git command failed: {:?}", args))
-            }
-        }
-
-        async fn run_git_with_output(&self, args: &[&str]) -> Result<std::process::Output> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(args);
-            log_and_run_command(&mut cmd).await
+            run_git_with_string(self.root(), args).await
         }
 
         pub async fn get_config_value(&self, key: &str) -> Result<String> {
@@ -151,17 +165,15 @@ pub mod git {
 
         pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand<'_>> {
             let key = format!("test.{}.command", test);
-            let output = self.run_git_with_output(&["config", "--get", &key]).await?;
+            let command = self.get_config_value(&key).await;
 
-            if output.status.success() {
-                let command = String::from_utf8(output.stdout)?.trim().to_string();
-                Ok(GitTestCommand {
+            match command {
+                Ok(command) => Ok(GitTestCommand {
                     repo: self,
                     key: test.to_string(),
                     value: command,
-                })
-            } else {
-                Err(anyhow::anyhow!("Test '{}' is not defined", test))
+                }),
+                _ => Err(anyhow::anyhow!("Test '{}' is not defined", test)),
             }
         }
 
