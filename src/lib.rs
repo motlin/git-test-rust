@@ -4,14 +4,49 @@ use clap::Parser;
 pub mod log_util {
     use anyhow::Context;
     use clap::ColorChoice;
+    use colored::Colorize;
     use log::{debug, LevelFilter};
     use simple_logger::SimpleLogger;
     use std::process::Output;
     use tokio::process::Command;
 
     pub(crate) async fn log_and_run_command(command: &mut Command) -> anyhow::Result<Output> {
-        debug!("Executing command: {:?}", command);
-        command.output().await.context("Failed to execute command")
+        // Get the program and arguments
+        let program = command.as_std().get_program().to_str().unwrap_or("");
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| {
+                let arg_str = arg.to_str().unwrap_or("");
+                if arg_str.contains(' ') {
+                    format!("'{}'", arg_str)
+                } else {
+                    arg_str.to_string()
+                }
+            })
+            .collect();
+
+        // Construct the full command string
+        let full_command = format!("{} {}", program, args.join(" "));
+
+        // Log the command
+        debug!("{} {}", "❯".green(), full_command);
+
+        // Execute the command
+        let output = command
+            .output()
+            .await
+            .context("Failed to execute command")?;
+
+        // Log the output
+        if !output.stdout.is_empty() {
+            debug!("{}", String::from_utf8_lossy(&output.stdout).dimmed());
+        }
+        if !output.stderr.is_empty() {
+            debug!("{}", String::from_utf8_lossy(&output.stderr).red());
+        }
+
+        Ok(output)
     }
 
     struct CustomLogger;
@@ -383,7 +418,7 @@ pub mod cli {
         #[arg(
             long,
             help = "run tests in git worktrees",
-            default_value = "./worktrees"
+            default_value = ".worktrees"
         )]
         pub worktree: Option<PathBuf>,
 
@@ -587,7 +622,7 @@ pub mod commands {
                 anyhow::bail!("Must specify either --test or --all");
             };
 
-            let worktree_base = worktree.unwrap_or_else(|| Path::new("./worktrees"));
+            let worktree_base = worktree.unwrap_or_else(|| Path::new(".worktrees"));
             let worktree_base = if worktree_base.is_relative() {
                 repo.root().join(worktree_base)
             } else {
