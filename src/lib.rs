@@ -117,6 +117,20 @@ pub mod git {
             GitRepository { root }
         }
 
+        pub fn root(&self) -> &Path {
+            &self.root
+        }
+
+        pub async fn run_git(&self, args: &[&str]) -> Result<()> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.root).args(args);
+
+            log_and_run_command(&mut cmd)
+                .await
+                .context("Failed to run git command")?;
+            Ok(())
+        }
+
         pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand> {
             let key = format!("test.{}.command", test);
             let value = self.get_config_value(&key).await?;
@@ -174,7 +188,7 @@ pub mod git {
 
             if output.status.success() {
                 let config_output = String::from_utf8(output.stdout)?;
-                let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$").unwrap();
+                let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$")?;
 
                 let vec = config_output
                     .split('\0')
@@ -208,25 +222,11 @@ pub mod git {
             Ok(String::from_utf8(output.stdout)?.trim().to_string())
         }
 
-        pub async fn run_git(&self, args: &[&str]) -> Result<()> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(args);
-
-            log_and_run_command(&mut cmd)
-                .await
-                .context("Failed to run git command")?;
-            Ok(())
-        }
-
-        pub async fn add_note(&self, ref_name: &str, commit: &str, content: &str) -> Result<()> {
+        pub async fn add_note(&self, ref_name: &str, object: &str, content: &str) -> Result<()> {
             self.run_git(&[
-                "notes", "--ref", ref_name, "add", "-f", "-m", content, commit,
+                "notes", "--ref", ref_name, "add", "-f", "-m", content, object,
             ])
             .await
-        }
-
-        pub fn root(&self) -> &Path {
-            &self.root
         }
     }
 
@@ -737,14 +737,11 @@ pub mod commands {
             results: &[TestResult],
         ) -> Result<()> {
             for result in results {
-                let status = if result.success { "good" } else { "bad" };
+                let status = if result.success { "✓" } else { "✗" };
                 repo.add_note(
-                    &format!("tests/{}", result.test_name),
-                    commit,
-                    &format!(
-                        "{}\n\nstdout:\n{}\n\nstderr:\n{}",
-                        status, result.stdout, result.stderr
-                    ),
+                    &format!("refs/notes/tests/{}", result.test_name),
+                    &format!("{}^{{tree}}", commit),
+                    status,
                 )
                 .await?;
             }
@@ -755,7 +752,8 @@ pub mod commands {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            repo.add_note("tests/summary", commit, &summary).await?;
+            repo.add_note("refs/notes/commits", commit, &summary)
+                .await?;
 
             Ok(())
         }
