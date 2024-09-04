@@ -64,11 +64,11 @@ pub mod test_git {
             .unwrap();
     }
 
-    pub fn setup_test() -> (TempDir, GitRepository) {
+    pub async fn setup_test() -> (TempDir, GitRepository) {
         let temp_dir = TempDir::new().unwrap();
         let repo_path = temp_dir.path();
         init_git_repo(repo_path);
-        let repo = get_repo_root(repo_path).unwrap();
+        let repo = get_repo_root(repo_path).await.unwrap();
         (temp_dir, repo)
     }
 }
@@ -123,15 +123,15 @@ mod test_command_add {
     };
     use git_test::commands::add::cmd_add;
 
-    #[test]
-    fn test_add_new_test() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_new_test() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "just default")?;
+        cmd_add(&repo, "default", false, false, "just default").await?;
 
-        let command = repo.get_test_command("default")?;
+        let command = repo.get_test_command("default").await?;
         assert_eq!(command.value(), "just default");
 
         assert_eq!(
@@ -141,35 +141,42 @@ mod test_command_add {
         Ok(())
     }
 
-    #[test]
-    fn test_add_multiple_tests() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_multiple_tests() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "just default")?;
+        cmd_add(&repo, "default", false, false, "just default").await?;
         cmd_add(
             &repo,
             "spotless-formats",
             false,
             false,
             "just spotless formats",
-        )?;
+        )
+        .await?;
         cmd_add(
             &repo,
             "spotless-java-sort-imports",
             false,
             false,
             "just spotless java-sort-imports",
-        )?;
+        )
+        .await?;
 
-        assert_eq!(repo.get_test_command("default")?.value(), "just default");
         assert_eq!(
-            repo.get_test_command("spotless-formats")?.value(),
+            repo.get_test_command("default").await?.value(),
+            "just default"
+        );
+        assert_eq!(
+            repo.get_test_command("spotless-formats").await?.value(),
             "just spotless formats"
         );
         assert_eq!(
-            repo.get_test_command("spotless-java-sort-imports")?.value(),
+            repo.get_test_command("spotless-java-sort-imports")
+                .await?
+                .value(),
             "just spotless java-sort-imports"
         );
 
@@ -181,32 +188,35 @@ mod test_command_add {
         Ok(())
     }
 
-    #[test]
-    fn test_add_existing_test_no_flags() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_existing_test_no_flags() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "old command")?;
-        cmd_add(&repo, "default", false, false, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command").await?;
+        cmd_add(&repo, "default", false, false, "new command").await?;
 
         assert_eq!(get_log_contents(), vec![
             "Changing test 'default' from '<empty>' to 'old command'",
             "Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
             "Changing test 'default' from 'old command' to 'new command'",
         ]);
-        assert_eq!(repo.get_test_command("default")?.value(), "new command");
+        assert_eq!(
+            repo.get_test_command("default").await?.value(),
+            "new command"
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_add_existing_test_with_forget() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_existing_test_with_forget() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "old command")?;
-        cmd_add(&repo, "default", true, false, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command").await?;
+        cmd_add(&repo, "default", true, false, "new command").await?;
 
         assert_eq!(
             get_log_contents(),
@@ -215,18 +225,21 @@ mod test_command_add {
                 "Changing test 'default' from 'old command' to 'new command'",
             ]
         );
-        assert_eq!(repo.get_test_command("default")?.value(), "new command");
+        assert_eq!(
+            repo.get_test_command("default").await?.value(),
+            "new command"
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_add_existing_test_with_keep() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_existing_test_with_keep() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "old command")?;
-        cmd_add(&repo, "default", false, true, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command").await?;
+        cmd_add(&repo, "default", false, true, "new command").await?;
 
         assert_eq!(
             get_log_contents(),
@@ -235,18 +248,21 @@ mod test_command_add {
                 "Changing test 'default' from 'old command' to 'new command'"
             ]
         );
-        assert_eq!(repo.get_test_command("default")?.value(), "new command");
+        assert_eq!(
+            repo.get_test_command("default").await?.value(),
+            "new command"
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_add_existing_test_with_forget_and_keep() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_existing_test_with_forget_and_keep() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "old command")?;
-        cmd_add(&repo, "default", true, true, "new command")?;
+        cmd_add(&repo, "default", false, false, "old command").await?;
+        cmd_add(&repo, "default", true, true, "new command").await?;
 
         assert_eq!(
             get_log_contents(),
@@ -255,37 +271,43 @@ mod test_command_add {
                 "Changing test 'default' from 'old command' to 'new command'"
             ]
         );
-        assert_eq!(repo.get_test_command("default")?.value(), "new command");
+        assert_eq!(
+            repo.get_test_command("default").await?.value(),
+            "new command"
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_add_existing_test_with_same_command() -> Result<()> {
+    #[tokio::test]
+    async fn test_add_existing_test_with_same_command() -> Result<()> {
         setup_logger();
         clear_log_contents();
         set_color_enabled(false);
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        cmd_add(&repo, "default", false, false, "same command")?;
-        cmd_add(&repo, "default", false, false, "same command")?;
+        cmd_add(&repo, "default", false, false, "same command").await?;
+        cmd_add(&repo, "default", false, false, "same command").await?;
 
         assert_eq!(get_log_contents(), vec![
             "Changing test 'default' from '<empty>' to 'same command'",
             "Overwriting existing test 'default'. Use --forget to delete stored results or --keep to preserve them.",
             "Changing test 'default' from 'same command' to 'same command'",
         ]);
-        assert_eq!(repo.get_test_command("default")?.value(), "same command");
+        assert_eq!(
+            repo.get_test_command("default").await?.value(),
+            "same command"
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_add_nonexistent_test() {
+    #[tokio::test]
+    async fn test_add_nonexistent_test() {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
         let result = repo.get_test_command("nonexistent");
-        assert!(result.is_err());
+        assert!(result.await.is_err());
 
         assert_eq!(get_log_contents(), Vec::<String>::new());
     }
@@ -297,23 +319,27 @@ mod test_command_list {
     use anyhow::Result;
     use git_test::commands::cmd_list;
 
-    #[test]
-    fn test_list_tests() -> Result<()> {
+    #[tokio::test]
+    async fn test_list_tests() -> Result<()> {
         setup_logger();
         clear_log_contents();
-        let (_temp_dir, repo) = setup_test();
+        let (_temp_dir, repo) = setup_test().await;
 
-        repo.set_test_command("default", "just default")?;
-        repo.set_config_value("test.default.description", "Default test")?;
-        repo.set_test_command("spotless-formats", "just spotless formats")?;
-        repo.set_config_value("test.spotless-formats.description", "Spotless formats test")?;
+        repo.set_test_command("default", "just default").await?;
+        repo.set_config_value("test.default.description", "Default test")
+            .await?;
+        repo.set_test_command("spotless-formats", "just spotless formats")
+            .await?;
+        repo.set_config_value("test.spotless-formats.description", "Spotless formats test")
+            .await?;
         repo.set_test_command(
             "spotless-java-sort-imports",
             "just spotless java-sort-imports",
-        )?;
-        repo.set_test_command("empty-command", "")?;
+        )
+        .await?;
+        repo.set_test_command("empty-command", "").await?;
 
-        cmd_list(&repo)?;
+        cmd_list(&repo).await?;
 
         let log_contents = get_log_contents();
         let expected_logs = vec![

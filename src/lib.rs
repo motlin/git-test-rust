@@ -6,11 +6,12 @@ pub mod log_util {
     use clap::ColorChoice;
     use log::{debug, LevelFilter};
     use simple_logger::SimpleLogger;
-    use std::process::{Command, Output};
+    use std::process::Output;
+    use tokio::process::Command;
 
-    pub(crate) fn log_and_run_command(command: &mut Command) -> anyhow::Result<Output> {
+    pub(crate) async fn log_and_run_command(command: &mut Command) -> anyhow::Result<Output> {
         debug!("Executing command: {:?}", command);
-        command.output().context("Failed to execute command")
+        command.output().await.context("Failed to execute command")
     }
 
     struct CustomLogger;
@@ -63,8 +64,9 @@ pub mod git {
     use anyhow::{Context, Result};
     use regex::Regex;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use tokio::process::Command;
 
+    #[derive(Clone)]
     pub struct GitRepository {
         root: PathBuf,
     }
@@ -80,9 +82,9 @@ pub mod git {
             GitRepository { root }
         }
 
-        pub fn get_test_command(&self, test: &str) -> Result<GitTestCommand> {
+        pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand> {
             let key = format!("test.{}.command", test);
-            let value = self.get_config_value(&key)?;
+            let value = self.get_config_value(&key).await?;
             Ok(GitTestCommand {
                 repo: self,
                 key,
@@ -90,14 +92,15 @@ pub mod git {
             })
         }
 
-        fn get_config_value(&self, key: &str) -> Result<String> {
-            let output = log_and_run_command(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(&self.root)
-                    .args(&["config", "--get", key]),
-            )
-            .context("Failed to execute git config --get")?;
+        async fn get_config_value(&self, key: &str) -> Result<String> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.root)
+                .args(&["config", "--get", key]);
+
+            let output = log_and_run_command(&mut cmd)
+                .await
+                .context("Failed to execute git config --get")?;
 
             if output.status.success() {
                 Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -106,29 +109,32 @@ pub mod git {
             }
         }
 
-        pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
-            log_and_run_command(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(&self.root)
-                    .args(&["config", key, value]),
-            )
-            .with_context(|| format!("Failed to set git config value for key '{}'", key))?;
+        pub async fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.root).args(&["config", key, value]);
+
+            log_and_run_command(&mut cmd)
+                .await
+                .with_context(|| format!("Failed to set git config value for key '{}'", key))?;
             Ok(())
         }
 
-        pub fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
+        pub async fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
             self.set_config_value(&format!("test.{}.command", test), command)
+                .await
         }
 
-        pub fn list_tests(&self) -> Result<Vec<(String, String)>> {
-            let output =
-                log_and_run_command(Command::new("git").arg("-C").arg(&self.root).args(&[
-                    "config",
-                    "--get-regexp",
-                    "--null",
-                    r"^test\..*\.command$",
-                ]))
+        pub async fn list_tests(&self) -> Result<Vec<(String, String)>> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.root).args(&[
+                "config",
+                "--get-regexp",
+                "--null",
+                r"^test\..*\.command$",
+            ]);
+
+            let output = log_and_run_command(&mut cmd)
+                .await
                 .context("Failed to execute git config --get-regexp")?;
 
             if output.status.success() {
@@ -155,6 +161,38 @@ pub mod git {
                 Ok(Vec::new()) // Return an empty vector if no tests are found
             }
         }
+
+        pub async fn get_head_commit(&self) -> Result<String> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.root).args(&["rev-parse", "HEAD"]);
+
+            let output = log_and_run_command(&mut cmd)
+                .await
+                .context("Failed to get HEAD commit")?;
+
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        }
+
+        pub async fn run_git(&self, args: &[&str]) -> Result<()> {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.root).args(args);
+
+            log_and_run_command(&mut cmd)
+                .await
+                .context("Failed to run git command")?;
+            Ok(())
+        }
+
+        pub async fn add_note(&self, ref_name: &str, commit: &str, content: &str) -> Result<()> {
+            self.run_git(&[
+                "notes", "--ref", ref_name, "add", "-f", "-m", content, commit,
+            ])
+            .await
+        }
+
+        pub fn root(&self) -> &Path {
+            &self.root
+        }
     }
 
     impl<'a> GitTestCommand<'a> {
@@ -167,14 +205,15 @@ pub mod git {
         }
     }
 
-    pub fn get_repo_root(dir: &Path) -> Result<GitRepository> {
-        let output = log_and_run_command(
-            Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(&["rev-parse", "--show-toplevel"]),
-        )
-        .context("Failed to execute git rev-parse --show-toplevel")?;
+    pub async fn get_repo_root(dir: &Path) -> Result<GitRepository> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(dir)
+            .args(&["rev-parse", "--show-toplevel"]);
+
+        let output = log_and_run_command(&mut cmd)
+            .await
+            .context("Failed to execute git rev-parse --show-toplevel")?;
 
         if output.status.success() {
             let root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
@@ -187,6 +226,7 @@ pub mod git {
 
 pub mod cli {
     use clap::{Args, ColorChoice, Parser, Subcommand};
+    use std::path::PathBuf;
 
     #[derive(Parser)]
     #[command(
@@ -293,9 +333,13 @@ pub mod cli {
             short,
             long,
             default_value = "default",
-            help = "name of test (default is 'default')"
+            help = "name of test (default is 'default')",
+            conflicts_with = "all"
         )]
-        pub test: String,
+        pub test: Option<String>,
+
+        #[arg(long, help = "run all defined tests", conflicts_with = "test")]
+        pub all: bool,
 
         #[arg(
             short,
@@ -335,6 +379,13 @@ pub mod cli {
             help = "read the list of commits to test from standard input, one per line"
         )]
         pub stdin: bool,
+
+        #[arg(
+            long,
+            help = "run tests in git worktrees",
+            default_value = "./worktrees"
+        )]
+        pub worktree: Option<PathBuf>,
 
         #[arg(help = "commits or ranges of commits to test")]
         pub commits: Vec<String>,
@@ -396,15 +447,14 @@ pub mod commands {
         use log::{info, warn};
         use std::path::PathBuf;
 
-        pub fn cmd_add(
+        pub async fn cmd_add(
             repo: &GitRepository,
             test: &str,
             forget: bool,
             keep: bool,
             command: &str,
         ) -> Result<()> {
-            // Check if the test already exists
-            let existing_command = repo.get_test_command(test);
+            let existing_command = repo.get_test_command(test).await;
             let had_existing_command = existing_command.is_ok();
 
             let old_command = existing_command
@@ -420,11 +470,12 @@ pub mod commands {
 
             if forget {
                 forget_results(repo, test)
+                    .await
                     .with_context(|| format!("Failed to delete stored results for '{}'", test))?;
             }
 
-            // Set the new test command
             repo.set_test_command(test, command)
+                .await
                 .with_context(|| format!("Failed to set test command for '{}'", test))?;
 
             info!(
@@ -439,13 +490,13 @@ pub mod commands {
     pub mod forget_results {
         use super::*;
 
-        pub fn cmd_forget_results(repo: &GitRepository, test: &str) -> Result<()> {
+        pub async fn cmd_forget_results(repo: &GitRepository, test: &str) -> Result<()> {
             // Implement forget-results command
             println!("Forgetting results for test '{}'", test);
             Ok(())
         }
 
-        pub(crate) fn forget_results(repo: &GitRepository, test: &str) -> Result<()> {
+        pub(crate) async fn forget_results(repo: &GitRepository, test: &str) -> Result<()> {
             // This is a placeholder for the forget-results logic
             // Implement the actual forget-results functionality here
             println!("Forgetting results for test '{}'", test);
@@ -458,8 +509,8 @@ pub mod commands {
         use colored::*;
         use std::collections::HashMap;
 
-        pub fn cmd_list(repo: &GitRepository) -> Result<()> {
-            let tests = repo.list_tests()?;
+        pub async fn cmd_list(repo: &GitRepository) -> Result<()> {
+            let tests = repo.list_tests().await?;
 
             if tests.is_empty() {
                 warn!("No tests defined.");
@@ -504,10 +555,14 @@ pub mod commands {
 
     pub mod run {
         use super::*;
+        use crate::log_util::log_and_run_command;
+        use std::path::Path;
+        use tokio::process::Command;
 
-        pub fn cmd_run(
+        pub async fn cmd_run(
             repo: &GitRepository,
-            test: &str,
+            test: Option<&str>,
+            all: bool,
             force: bool,
             forget: bool,
             retest: bool,
@@ -515,9 +570,158 @@ pub mod commands {
             dry_run: bool,
             stdin: bool,
             commits: &[String],
+            worktree: Option<&Path>,
         ) -> Result<()> {
-            // Implement run command
-            println!("Running test '{}' on commits: {:?}", test, commits);
+            if test.is_some() && all {
+                anyhow::bail!("Cannot specify both --test and --all");
+            }
+
+            let tests = if all {
+                repo.list_tests().await?
+            } else if let Some(test_name) = test {
+                vec![(
+                    test_name.to_string(),
+                    repo.get_test_command(test_name).await?.value().to_string(),
+                )]
+            } else {
+                anyhow::bail!("Must specify either --test or --all");
+            };
+
+            let worktree_base = worktree.unwrap_or_else(|| Path::new("./worktrees"));
+            let worktree_base = if worktree_base.is_relative() {
+                repo.root().join(worktree_base)
+            } else {
+                worktree_base.to_path_buf()
+            };
+
+            let commits = if commits.is_empty() {
+                vec![repo.get_head_commit().await?]
+            } else {
+                commits.to_vec()
+            };
+
+            for commit in commits {
+                let test_results =
+                    run_tests_for_commit(repo, &commit, &tests, &worktree_base).await?;
+                update_git_notes(repo, &commit, &test_results).await?;
+            }
+
+            Ok(())
+        }
+
+        async fn run_tests_for_commit(
+            repo: &GitRepository,
+            commit: &str,
+            tests: &[(String, String)],
+            worktree_base: &Path,
+        ) -> Result<Vec<TestResult>> {
+            let tasks: Vec<_> = tests
+                .iter()
+                .map(|(test_name, test_command)| {
+                    let repo = repo.clone();
+                    let commit = commit.to_string();
+                    let test_name = test_name.clone();
+                    let test_command = test_command.clone();
+                    let worktree_base = worktree_base.to_path_buf();
+
+                    tokio::spawn(async move {
+                        run_single_test(&repo, &commit, &test_name, &test_command, &worktree_base)
+                            .await
+                    })
+                })
+                .collect();
+
+            let results = futures::future::join_all(tasks).await;
+            results
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+        }
+
+        async fn run_single_test(
+            repo: &GitRepository,
+            commit: &str,
+            test_name: &str,
+            test_command: &str,
+            worktree_base: &Path,
+        ) -> Result<TestResult> {
+            let worktree_path = worktree_base.join(format!("{}/{}", commit, test_name));
+            create_worktree(repo, commit, &worktree_path).await?;
+
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(test_command).current_dir(&worktree_path);
+
+            let output = log_and_run_command(&mut cmd).await?;
+
+            let success = output.status.success();
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+            // Clean up the worktree after the test
+            cleanup_worktree(repo, &worktree_path).await?;
+
+            Ok(TestResult {
+                test_name: test_name.to_string(),
+                success,
+                stdout,
+                stderr,
+            })
+        }
+
+        struct TestResult {
+            test_name: String,
+            success: bool,
+            stdout: String,
+            stderr: String,
+        }
+
+        async fn create_worktree(repo: &GitRepository, commit: &str, path: &Path) -> Result<()> {
+            tokio::fs::create_dir_all(path).await?;
+            repo.run_git(&[
+                "worktree",
+                "add",
+                "--detach",
+                path.to_str().unwrap(),
+                commit,
+            ])
+            .await?;
+            Ok(())
+        }
+
+        async fn cleanup_worktree(repo: &GitRepository, path: &Path) -> Result<()> {
+            repo.run_git(&["worktree", "remove", "--force", path.to_str().unwrap()])
+                .await?;
+            Ok(())
+        }
+
+        async fn update_git_notes(
+            repo: &GitRepository,
+            commit: &str,
+            results: &[TestResult],
+        ) -> Result<()> {
+            for result in results {
+                let status = if result.success { "good" } else { "bad" };
+                repo.add_note(
+                    &format!("tests/{}", result.test_name),
+                    commit,
+                    &format!(
+                        "{}\n\nstdout:\n{}\n\nstderr:\n{}",
+                        status, result.stdout, result.stderr
+                    ),
+                )
+                .await?;
+            }
+
+            let summary = results
+                .iter()
+                .map(|r| format!("{}: {}", r.test_name, if r.success { "✓" } else { "✗" }))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            repo.add_note("tests/summary", commit, &summary).await?;
+
             Ok(())
         }
     }
@@ -530,11 +734,11 @@ pub mod commands {
     pub use run::cmd_run;
 }
 
-pub fn main() -> Result<()> {
+#[tokio::main]
+pub async fn main() -> Result<()> {
     use crate::git::get_repo_root;
     use crate::log_util::init_logging;
     use cli::{Cli, Commands};
-    use colored::control;
 
     let cli = Cli::parse();
 
@@ -544,13 +748,29 @@ pub fn main() -> Result<()> {
 
     // Get the repository root
     let current_dir = std::env::current_dir()?;
-    let repo = get_repo_root(&current_dir)?;
+    let repo = get_repo_root(&current_dir).await?;
 
     match &cli.command {
         Commands::Add(args) => {
-            commands::cmd_add(&repo, &args.test, args.forget, args.keep, &args.command)
+            commands::cmd_add(&repo, &args.test, args.forget, args.keep, &args.command).await
         }
-        Commands::List => commands::cmd_list(&repo),
+        Commands::List => commands::cmd_list(&repo).await,
+        Commands::Run(args) => {
+            commands::cmd_run(
+                &repo,
+                args.test.as_deref(),
+                args.all,
+                args.force,
+                args.forget,
+                args.retest,
+                args.keep_going,
+                args.dry_run,
+                args.stdin,
+                &args.commits,
+                args.worktree.as_deref(),
+            )
+            .await
+        }
         _ => unimplemented!("Other commands need to be updated"),
     }
 }
