@@ -121,51 +121,48 @@ pub mod git {
             &self.root
         }
 
-        pub async fn run_git(&self, args: &[&str]) -> Result<()> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(args);
-
-            log_and_run_command(&mut cmd)
-                .await
-                .context("Failed to run git command")?;
-            Ok(())
-        }
-
-        pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand> {
-            let key = format!("test.{}.command", test);
-            let value = self.get_config_value(&key).await?;
-            Ok(GitTestCommand {
-                repo: self,
-                key,
-                value,
-            })
-        }
-
-        async fn get_config_value(&self, key: &str) -> Result<String> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.root)
-                .args(&["config", "--get", key]);
-
-            let output = log_and_run_command(&mut cmd)
-                .await
-                .context("Failed to execute git config --get")?;
-
+        pub async fn run_git(&self, args: &[&str]) -> Result<String> {
+            let output = self.run_git_with_output(args).await?;
             if output.status.success() {
                 Ok(String::from_utf8(output.stdout)?.trim().to_string())
             } else {
-                Err(anyhow::anyhow!("Config value not found for key: {}", key))
+                Err(anyhow::anyhow!("Git command failed: {:?}", args))
             }
         }
 
-        pub async fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
+        async fn run_git_with_output(&self, args: &[&str]) -> Result<std::process::Output> {
             let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(&["config", key, value]);
+            cmd.arg("-C").arg(&self.root).args(args);
+            log_and_run_command(&mut cmd).await
+        }
 
-            log_and_run_command(&mut cmd)
+        pub async fn get_config_value(&self, key: &str) -> Result<String> {
+            self.run_git(&["config", "--get", key])
+                .await
+                .context("Failed to get git config value")
+        }
+
+        pub async fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
+            self.run_git(&["config", key, value])
                 .await
                 .with_context(|| format!("Failed to set git config value for key '{}'", key))?;
             Ok(())
+        }
+
+        pub async fn get_test_command(&self, test: &str) -> Result<GitTestCommand<'_>> {
+            let key = format!("test.{}.command", test);
+            let output = self.run_git_with_output(&["config", "--get", &key]).await?;
+
+            if output.status.success() {
+                let command = String::from_utf8(output.stdout)?.trim().to_string();
+                Ok(GitTestCommand {
+                    repo: self,
+                    key: test.to_string(),
+                    value: command,
+                })
+            } else {
+                Err(anyhow::anyhow!("Test '{}' is not defined", test))
+            }
         }
 
         pub async fn set_test_command(&self, test: &str, command: &str) -> Result<()> {
@@ -174,59 +171,41 @@ pub mod git {
         }
 
         pub async fn list_tests(&self) -> Result<Vec<(String, String)>> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(&[
-                "config",
-                "--get-regexp",
-                "--null",
-                r"^test\..*\.command$",
-            ]);
+            let output = self
+                .run_git(&["config", "--get-regexp", "--null", r"^test\..*\.command$"])
+                .await?;
 
-            let output = log_and_run_command(&mut cmd)
-                .await
-                .context("Failed to execute git config --get-regexp")?;
+            let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$").unwrap();
 
-            if output.status.success() {
-                let config_output = String::from_utf8(output.stdout)?;
-                let test_config_re = Regex::new(r"^test\.(?P<name>.*)\.command$")?;
+            let tests = output
+                .split('\0')
+                .filter_map(|entry| {
+                    let mut parts = entry.splitn(2, '\n');
+                    match (parts.next(), parts.next()) {
+                        (Some(key), Some(value)) => test_config_re.captures(key).map(|captures| {
+                            let name = captures.name("name").unwrap().as_str().to_string();
+                            (name, value.to_string())
+                        }),
+                        _ => None,
+                    }
+                })
+                .collect();
 
-                let vec = config_output
-                    .split('\0')
-                    .filter_map(|entry| {
-                        let mut parts = entry.splitn(2, '\n');
-                        match (parts.next(), parts.next()) {
-                            (Some(key), Some(value)) => {
-                                test_config_re.captures(key).map(|captures| {
-                                    let name = captures.name("name").unwrap().as_str().to_string();
-                                    (name, value.to_string())
-                                })
-                            }
-                            _ => None,
-                        }
-                    })
-                    .collect();
-                Ok(vec)
-            } else {
-                Ok(Vec::new()) // Return an empty vector if no tests are found
-            }
+            Ok(tests)
         }
 
         pub async fn get_head_commit(&self) -> Result<String> {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.root).args(&["rev-parse", "HEAD"]);
-
-            let output = log_and_run_command(&mut cmd)
+            self.run_git(&["rev-parse", "HEAD"])
                 .await
-                .context("Failed to get HEAD commit")?;
-
-            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+                .context("Failed to get HEAD commit")
         }
 
         pub async fn add_note(&self, ref_name: &str, object: &str, content: &str) -> Result<()> {
             self.run_git(&[
                 "notes", "--ref", ref_name, "add", "-f", "-m", content, object,
             ])
-            .await
+            .await?;
+            Ok(())
         }
     }
 
