@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 
 pub mod log_util {
@@ -471,16 +471,15 @@ pub mod cli {
 
 pub mod commands {
     use crate::git::GitRepository;
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use log::{info, warn};
 
     pub mod add {
         use super::*;
         use crate::commands::forget_results::forget_results;
-        use crate::git;
+
         use anyhow::{Context, Result};
         use log::{info, warn};
-        use std::path::PathBuf;
 
         pub async fn cmd_add(
             repo: &GitRepository,
@@ -542,7 +541,6 @@ pub mod commands {
     pub mod list {
         use super::*;
         use colored::*;
-        use std::collections::HashMap;
 
         pub async fn cmd_list(repo: &GitRepository) -> Result<()> {
             let tests = repo.list_tests().await?;
