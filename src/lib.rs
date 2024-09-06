@@ -247,7 +247,7 @@ pub mod git {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(dir)
-            .args(&["rev-parse", "--show-toplevel"]);
+            .args(["rev-parse", "--show-toplevel"]);
 
         let output = log_and_run_command(&mut cmd)
             .await
@@ -700,7 +700,7 @@ pub mod commands {
         use super::*;
         use crate::git::GitTestCommand;
         use crate::git::{
-            GitRepository, GitRepositoryWorktreeExt, GitSha, Worktree, WorktreeConfig,
+            GitRepository, GitRepositoryWorktreeExt, GitSha, WorktreeConfig,
         };
         use crate::log_util::log_and_run_command;
         use std::path::Path;
