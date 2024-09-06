@@ -117,7 +117,20 @@ pub mod git {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct GitSha(String);
+
+    impl GitSha {
+        pub fn new(sha: String) -> Self {
+            GitSha(sha)
+        }
+
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    #[derive(Clone, Debug)]
     pub struct GitRepository {
         root: PathBuf,
     }
@@ -245,6 +258,113 @@ pub mod git {
             Ok(GitRepository::new(root))
         } else {
             Err(anyhow::anyhow!("Not in a git repository"))
+        }
+    }
+
+    // Enumeration for worktree configuration
+    #[derive(Debug, Clone)]
+    pub enum WorktreeConfig {
+        Main(GitRepository),
+        Linked { repo: GitRepository, path: PathBuf },
+    }
+
+    // Enumeration for actual worktree
+    #[derive(Debug, Clone)]
+    pub enum Worktree {
+        Main(GitRepository),
+        Linked {
+            repo: GitRepository,
+            path_prefix: PathBuf,
+            sha: GitSha,
+            test_name: String,
+        },
+    }
+
+    impl WorktreeConfig {
+        pub fn to_worktree(&self, sha: GitSha, test_name: &str) -> Worktree {
+            match self {
+                WorktreeConfig::Main(repo) => Worktree::Main(repo.clone()),
+                WorktreeConfig::Linked { repo, path } => Worktree::Linked {
+                    repo: repo.clone(),
+                    path_prefix: path.clone(),
+                    sha,
+                    test_name: test_name.to_string(),
+                },
+            }
+        }
+    }
+
+    impl Worktree {
+        pub async fn create(&self) -> Result<()> {
+            if let Worktree::Linked {
+                repo,
+                path_prefix,
+                sha,
+                test_name,
+            } = self
+            {
+                let worktree_path = self.get_path();
+                tokio::fs::create_dir_all(&worktree_path).await?;
+                repo.run_git(&[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    worktree_path.to_str().unwrap(),
+                    sha.as_str(),
+                ])
+                .await?;
+            }
+            Ok(())
+        }
+
+        pub async fn delete(&self) -> Result<()> {
+            if let Worktree::Linked { repo, .. } = self {
+                let worktree_path = self.get_path();
+                repo.run_git(&[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    worktree_path.to_str().unwrap(),
+                ])
+                .await?;
+            }
+            Ok(())
+        }
+
+        pub fn get_path(&self) -> PathBuf {
+            match self {
+                Worktree::Main(repo) => repo.root().to_path_buf(),
+                Worktree::Linked {
+                    path_prefix,
+                    sha,
+                    test_name,
+                    ..
+                } => path_prefix.join(format!("{}/{}", sha.as_str(), test_name)),
+            }
+        }
+    }
+
+    // Extension trait for GitRepository to support worktree operations
+    pub trait GitRepositoryWorktreeExt {
+        fn to_worktree_config(&self) -> WorktreeConfig;
+        fn to_linked_worktree_config(&self, path: &Path) -> WorktreeConfig;
+    }
+
+    impl GitRepositoryWorktreeExt for GitRepository {
+        fn to_worktree_config(&self) -> WorktreeConfig {
+            WorktreeConfig::Main(self.clone())
+        }
+
+        fn to_linked_worktree_config(&self, path: &Path) -> WorktreeConfig {
+            let absolute_path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                self.root().join(path)
+            };
+            WorktreeConfig::Linked {
+                repo: self.clone(),
+                path: absolute_path,
+            }
         }
     }
 }
@@ -579,6 +699,9 @@ pub mod commands {
     pub mod run {
         use super::*;
         use crate::git::GitTestCommand;
+        use crate::git::{
+            GitRepository, GitRepositoryWorktreeExt, GitSha, Worktree, WorktreeConfig,
+        };
         use crate::log_util::log_and_run_command;
         use std::path::Path;
         use tokio::process::Command;
@@ -608,11 +731,10 @@ pub mod commands {
                 anyhow::bail!("Must specify either --test or --all");
             };
 
-            let worktree_base = worktree.unwrap_or_else(|| Path::new(".worktrees"));
-            let worktree_base = if worktree_base.is_relative() {
-                repo.root().join(worktree_base)
+            let worktree_config = if let Some(worktree_path) = worktree {
+                repo.to_linked_worktree_config(worktree_path)
             } else {
-                worktree_base.to_path_buf()
+                repo.to_worktree_config()
             };
 
             let commits = if commits.is_empty() {
@@ -622,7 +744,8 @@ pub mod commands {
             };
 
             for commit in commits {
-                let test_results = run_tests_for_commit(&tests, &commit, &worktree_base).await?;
+                let sha = GitSha::new(commit.clone());
+                let test_results = run_tests_for_commit(&tests, &sha, &worktree_config).await?;
                 update_git_notes(repo, &commit, &test_results).await?;
             }
 
@@ -631,18 +754,18 @@ pub mod commands {
 
         async fn run_tests_for_commit(
             tests: &[GitTestCommand],
-            commit: &str,
-            worktree_base: &Path,
+            sha: &GitSha,
+            worktree_config: &WorktreeConfig,
         ) -> Result<Vec<TestResult>> {
             let tasks: Vec<_> = tests
                 .iter()
                 .map(|git_test_command| {
                     let git_test_command = git_test_command.clone();
-                    let commit = commit.to_string();
-                    let worktree_base = worktree_base.to_path_buf();
+                    let sha = sha.clone();
+                    let worktree_config = worktree_config.clone();
 
                     tokio::spawn(async move {
-                        run_single_test(&git_test_command, &commit, &worktree_base).await
+                        run_single_test(&git_test_command, &sha, &worktree_config).await
                     })
                 })
                 .collect();
@@ -656,20 +779,22 @@ pub mod commands {
                 .collect::<Result<Vec<_>, _>>()
         }
 
-        async fn run_single_test<'a>(
+        async fn run_single_test(
             GitTestCommand {
                 repo,
                 test_name,
                 test_command,
             }: &GitTestCommand,
-            commit: &str,
-            worktree_base: &Path,
+            sha: &GitSha,
+            worktree_config: &WorktreeConfig,
         ) -> Result<TestResult> {
-            let worktree_path = worktree_base.join(format!("{}/{}", commit, test_name));
-            create_worktree(repo, commit, &worktree_path).await?;
+            let worktree = worktree_config.to_worktree(sha.clone(), test_name);
+            worktree.create().await?;
 
             let mut cmd = Command::new("sh");
-            cmd.arg("-c").arg(test_command).current_dir(&worktree_path);
+            cmd.arg("-c")
+                .arg(test_command)
+                .current_dir(worktree.get_path());
 
             let output = log_and_run_command(&mut cmd).await?;
 
@@ -678,7 +803,7 @@ pub mod commands {
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
             // Clean up the worktree after the test
-            cleanup_worktree(repo, &worktree_path).await?;
+            worktree.delete().await?;
 
             Ok(TestResult {
                 test_name: test_name.to_string(),
@@ -693,25 +818,6 @@ pub mod commands {
             success: bool,
             stdout: String,
             stderr: String,
-        }
-
-        async fn create_worktree(repo: &GitRepository, commit: &str, path: &Path) -> Result<()> {
-            tokio::fs::create_dir_all(path).await?;
-            repo.run_git(&[
-                "worktree",
-                "add",
-                "--detach",
-                path.to_str().unwrap(),
-                commit,
-            ])
-            .await?;
-            Ok(())
-        }
-
-        async fn cleanup_worktree(repo: &GitRepository, path: &Path) -> Result<()> {
-            repo.run_git(&["worktree", "remove", "--force", path.to_str().unwrap()])
-                .await?;
-            Ok(())
         }
 
         async fn update_git_notes(
